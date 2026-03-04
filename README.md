@@ -25,7 +25,21 @@ because datasets always live inside a Power BI workspace (group).
 
 - Python 3.11+
 - A Power BI Pro, Premium Per User (PPU), or Premium capacity licence
-- An Azure AD **app registration** (public client / mobile & desktop)
+- An Azure AD **app registration** (public client / mobile & desktop) — see
+  below for why this is needed and how quick it is
+
+### Why an app registration is required
+
+Even if you already have a Power BI user account, OAuth 2.0 always requires a
+**client ID** to identify *which application* is acting on your behalf.  Your
+user account says *who you are*; the app registration says *which app is
+speaking*.
+
+The good news: the registration is **free**, takes ~5 minutes, requires no
+client secret (public client / device code flow), and no Power BI admin
+consent is needed for the two read-only delegated scopes below.  It is a
+one-time setup — after that, any user who authenticates through it uses their
+own Power BI permissions as normal.
 
 ### Azure AD App Registration
 
