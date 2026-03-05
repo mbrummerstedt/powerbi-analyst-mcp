@@ -10,6 +10,10 @@ venv/
 *.egg-info/
 dist/
 build/
+.pytest_cache/
+
+# Editor
+.vscode/
 
 # Token cache (written by auth.py at runtime)
-*.powerbi_mcp_token_cache.json
+.powerbi_mcp_token_cache.*

@@ -96,7 +96,7 @@ and enter the code ABCD1234 to authenticate.
 ```
 
 Open the URL, enter the code, and sign in with your Power BI account.
-The token is cached in `~/.powerbi_mcp_token_cache.json` and refreshes
+The token is cached securely in `~/.powerbi_mcp_token_cache.bin` and refreshes
 automatically for ~90 days.
 
 ## Running the server
@@ -174,6 +174,14 @@ CALCULATETABLE(
 
 ## Security
 
-- Tokens are stored in `~/.powerbi_mcp_token_cache.json` (mode `600`).
-- The server never stores or logs access tokens.
-- All data access is gated by the user's own Power BI permissions.
+- Tokens are persisted using OS-native secure storage via
+  [`msal-extensions`](https://github.com/AzureAD/microsoft-authentication-extensions-for-python):
+  - **macOS** — Keychain
+  - **Windows** — DPAPI-encrypted file
+  - **Linux** — LibSecret (gnome-keyring / KWallet); falls back to an
+    encrypted file if LibSecret is unavailable
+- The cache file is written to `~/.powerbi_mcp_token_cache.bin` and is never
+  committed (covered by `.gitignore`).
+- The server never logs access tokens.
+- All data access is gated by the user's own Power BI permissions (delegated
+  OAuth 2.0 — no service principal, no client secret).

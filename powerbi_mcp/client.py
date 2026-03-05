@@ -15,8 +15,10 @@ from typing import Any
 
 import httpx
 
+from .models import Column, Dataset, Measure, RefreshEntry, Table, Workspace
+
 BASE_URL = "https://api.powerbi.com/v1.0/myorg"
-DEFAULT_TIMEOUT = 120  # seconds – DAX queries can be slow
+DEFAULT_TIMEOUT = 120
 
 
 class PowerBIError(Exception):
@@ -52,22 +54,15 @@ class PowerBIClient:
             "Content-Type": "application/json",
         }
 
-    # ------------------------------------------------------------------
-    # Workspaces (Groups)
-    # ------------------------------------------------------------------
-
-    async def list_workspaces(self) -> list[dict]:
+    async def list_workspaces(self) -> list[Workspace]:
         """Return all workspaces the authenticated user is a member of."""
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.get(f"{BASE_URL}/groups", headers=self._headers)
             _raise_for_status(resp)
-            return resp.json().get("value", [])
+            data = resp.json().get("value", [])
+            return [Workspace.model_validate(ws) for ws in data]
 
-    # ------------------------------------------------------------------
-    # Datasets / Semantic Models
-    # ------------------------------------------------------------------
-
-    async def list_datasets(self, workspace_id: str) -> list[dict]:
+    async def list_datasets(self, workspace_id: str) -> list[Dataset]:
         """
         Return all datasets in a specific workspace.
 
@@ -80,19 +75,20 @@ class PowerBIClient:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.get(url, headers=self._headers)
             _raise_for_status(resp)
-            return resp.json().get("value", [])
+            data = resp.json().get("value", [])
+            return [Dataset.model_validate(ds) for ds in data]
 
-    async def get_dataset(self, workspace_id: str, dataset_id: str) -> dict:
+    async def get_dataset(self, workspace_id: str, dataset_id: str) -> Dataset:
         """Return metadata for a single dataset."""
         url = f"{BASE_URL}/groups/{workspace_id}/datasets/{dataset_id}"
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.get(url, headers=self._headers)
             _raise_for_status(resp)
-            return resp.json()
+            return Dataset.model_validate(resp.json())
 
     async def get_dataset_refresh_history(
         self, workspace_id: str, dataset_id: str, top: int = 10
-    ) -> list[dict]:
+    ) -> list[RefreshEntry]:
         """Return recent refresh history for a dataset."""
         url = (
             f"{BASE_URL}/groups/{workspace_id}/datasets/{dataset_id}"
@@ -101,11 +97,8 @@ class PowerBIClient:
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.get(url, headers=self._headers)
             _raise_for_status(resp)
-            return resp.json().get("value", [])
-
-    # ------------------------------------------------------------------
-    # DAX query execution
-    # ------------------------------------------------------------------
+            data = resp.json().get("value", [])
+            return [RefreshEntry.model_validate(entry) for entry in data]
 
     async def execute_dax(
         self,
@@ -153,17 +146,7 @@ class PowerBIClient:
             _raise_for_status(resp)
             return resp.json()
 
-    # ------------------------------------------------------------------
-    # Metadata helpers (backed by DAX INFO.VIEW functions)
-    #
-    # INFO.VIEW.* are DAX table functions (not DMV / INFO() calls) and
-    # are supported by the executeQueries endpoint for Import and
-    # DirectQuery models on Power BI Premium / PPU / shared capacity.
-    # ------------------------------------------------------------------
-
-    async def list_tables(
-        self, workspace_id: str, dataset_id: str
-    ) -> list[dict]:
+    async def list_tables(self, workspace_id: str, dataset_id: str) -> list[Table]:
         """
         Return user-visible tables in a dataset.
 
@@ -184,11 +167,12 @@ SELECTCOLUMNS(
 ORDER BY [Name]
 """.strip()
         result = await self.execute_dax(workspace_id, dataset_id, dax)
-        return _parse_dax_rows(result)
+        rows = _parse_dax_rows(result)
+        return [Table.model_validate(row) for row in rows]
 
     async def list_measures(
         self, workspace_id: str, dataset_id: str, table_name: str | None = None
-    ) -> list[dict]:
+    ) -> list[Measure]:
         """
         Return measures defined in the dataset.
 
@@ -218,11 +202,12 @@ SELECTCOLUMNS(
 ORDER BY [TableName], [Name]
 """.strip()
         result = await self.execute_dax(workspace_id, dataset_id, dax)
-        return _parse_dax_rows(result)
+        rows = _parse_dax_rows(result)
+        return [Measure.model_validate(row) for row in rows]
 
     async def list_columns(
         self, workspace_id: str, dataset_id: str, table_name: str | None = None
-    ) -> list[dict]:
+    ) -> list[Column]:
         """
         Return columns (dimensions) defined in the dataset.
 
@@ -252,12 +237,9 @@ SELECTCOLUMNS(
 ORDER BY [TableName], [ExplicitName]
 """.strip()
         result = await self.execute_dax(workspace_id, dataset_id, dax)
-        return _parse_dax_rows(result)
+        rows = _parse_dax_rows(result)
+        return [Column.model_validate(row) for row in rows]
 
-
-# ------------------------------------------------------------------
-# Response parsing utilities
-# ------------------------------------------------------------------
 
 def _parse_dax_rows(api_response: dict[str, Any]) -> list[dict]:
     """
@@ -270,10 +252,7 @@ def _parse_dax_rows(api_response: dict[str, Any]) -> list[dict]:
     for result in api_response.get("results", []):
         for table in result.get("tables", []):
             for row in table.get("rows", []):
-                # Strip bracket-wrapped key format: "[ColumnName]" -> "ColumnName"
-                clean_row = {
-                    _strip_brackets(k): v for k, v in row.items()
-                }
+                clean_row = {_strip_brackets(k): v for k, v in row.items()}
                 rows.append(clean_row)
     return rows
 
