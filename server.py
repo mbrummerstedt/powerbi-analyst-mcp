@@ -24,6 +24,7 @@ list_tables           - List visible tables in a dataset.
 list_measures         - List measures (optionally filtered by table).
 list_columns          - List columns / dimensions (optionally filtered by table).
 execute_dax           - Execute a DAX query and return the result rows.
+read_query_result     - Read rows from a saved CSV result with pagination.
 """
 
 from __future__ import annotations
@@ -70,7 +71,7 @@ mcp = FastMCP(
     ),
 )
 
-register_tools(mcp, settings.client_id, settings.tenant_id)
+register_tools(mcp, settings.client_id, settings.tenant_id, settings.output_dir)
 
 if __name__ == "__main__":
     if "--login" in sys.argv:

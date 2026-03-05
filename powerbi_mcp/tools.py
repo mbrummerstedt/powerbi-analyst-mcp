@@ -14,9 +14,17 @@ from mcp.server.fastmcp import FastMCP
 
 from .auth import PowerBIAuth
 from .client import PowerBIClient, PowerBIError
+from .output import read_csv_page, save_rows_to_csv
+
+INLINE_ROW_LIMIT = 50
 
 
-def register_tools(mcp: FastMCP, client_id: str, tenant_id: str = "organizations") -> None:
+def register_tools(
+    mcp: FastMCP,
+    client_id: str,
+    tenant_id: str = "organizations",
+    output_dir: str = "powerbi_output",
+) -> None:
     """
     Register all Power BI tools with the MCP server.
 
@@ -28,6 +36,8 @@ def register_tools(mcp: FastMCP, client_id: str, tenant_id: str = "organizations
         Azure AD application (client) ID for authentication.
     tenant_id:
         Azure AD tenant ID or "organizations" (default).
+    output_dir:
+        Directory where large DAX query results are saved as CSV files.
     """
     _auth = PowerBIAuth(client_id, tenant_id)
 
@@ -245,8 +255,8 @@ def register_tools(mcp: FastMCP, client_id: str, tenant_id: str = "organizations
         """
         List measures defined in a Power BI dataset.
 
-        Returns each measure's name, parent table, description, format string,
-        and DAX expression.  Optionally filter by table name.
+        Returns each measure's name, parent table, description, and format string.
+        Optionally filter by table name.
         """
         client = _get_client()
         try:
@@ -264,7 +274,6 @@ def register_tools(mcp: FastMCP, client_id: str, tenant_id: str = "organizations
                 "tableName": m.table_name,
                 "description": m.description,
                 "formatString": m.format_string,
-                "expression": m.expression,
             }
             for m in measures
         ]
@@ -323,12 +332,32 @@ def register_tools(mcp: FastMCP, client_id: str, tenant_id: str = "organizations
             "A valid DAX query. Must start with EVALUATE. "
             'Example: "EVALUATE SUMMARIZECOLUMNS(\'Date\'[Year], \\"Sales\\", [Total Sales])"',
         ],
+        max_rows: Annotated[
+            int | None,
+            "Optional hard cap on the number of rows returned. When set, the query "
+            "is wrapped in TOPN(<max_rows>, ...) before execution, limiting results "
+            "at the Power BI engine level. Useful for sampling large tables.",
+        ] = None,
+        result_name: Annotated[
+            str | None,
+            "Optional short label describing what this result contains "
+            "(e.g. 'sales by region 2024'). Used in the CSV filename so saved files "
+            "are easy to identify later. Maximum 40 characters; special characters "
+            "are replaced with underscores. Example filename: "
+            "dax_result_sales_by_region_2024_20260305_143022.csv",
+        ] = None,
     ) -> str:
         """
         Execute a DAX query against a Power BI dataset and return the result rows.
 
         The query must start with EVALUATE (standard DAX query syntax).
         Results are returned as a JSON array of objects, with column names as keys.
+
+        Small results (<= 50 rows) are returned inline as JSON.
+        Large results (> 50 rows) are automatically saved to a CSV file and a
+        compact summary is returned with the file path, column names, row count,
+        and a preview of the first 5 rows. Use `read_query_result` to page
+        through a saved CSV, or read the file directly.
 
         Limitations imposed by the Power BI API:
         - Maximum 1,000,000 values or 100,000 rows per query.
@@ -340,22 +369,87 @@ def register_tools(mcp: FastMCP, client_id: str, tenant_id: str = "organizations
         - Use TOPN or FILTER to limit large result sets.
         - Use SUMMARIZECOLUMNS for aggregated queries.
         - Use CALCULATETABLE for filtered table expressions.
+        - Use max_rows to sample a large table without rewriting the DAX.
+        - Use result_name to give the saved CSV a meaningful filename.
         """
+        from .client import _parse_dax_rows
+
+        if max_rows is not None and max_rows > 0:
+            dax_query = f"EVALUATE TOPN({max_rows}, {dax_query[len('EVALUATE'):].strip()})"
+
         client = _get_client()
         try:
             raw = await client.execute_dax(workspace_id, dataset_id, dax_query)
         except PowerBIError as exc:
             return f"DAX query error: {exc}"
 
-        from .client import _parse_dax_rows
-
         rows = _parse_dax_rows(raw)
 
         if not rows:
             return "Query executed successfully but returned no rows."
 
+        if len(rows) <= INLINE_ROW_LIMIT:
+            return _fmt_json({"rowCount": len(rows), "rows": rows})
+
+        try:
+            file_path = save_rows_to_csv(rows, output_dir, name=result_name)
+        except Exception as exc:
+            return _fmt_json({"rowCount": len(rows), "rows": rows, "saveError": str(exc)})
+
+        columns = list(rows[0].keys())
+        preview = rows[:5]
         result = {
             "rowCount": len(rows),
-            "rows": rows,
+            "columns": columns,
+            "preview": preview,
+            "savedTo": file_path,
+            "message": (
+                f"Large result ({len(rows)} rows) saved to CSV. "
+                "Use `read_query_result` to page through the data, "
+                "or read the file directly."
+            ),
         }
         return _fmt_json(result)
+
+    @mcp.tool()
+    async def read_query_result(
+        file_path: Annotated[
+            str,
+            "Absolute path to a CSV file returned by a previous `execute_dax` call "
+            "(the `savedTo` field in the response).",
+        ],
+        offset: Annotated[
+            int,
+            "Zero-based row offset to start reading from. Default: 0.",
+        ] = 0,
+        limit: Annotated[
+            int,
+            "Maximum number of rows to return. Default: 100.",
+        ] = 100,
+    ) -> str:
+        """
+        Read a page of rows from a CSV file saved by `execute_dax`.
+
+        Use this tool when `execute_dax` returns a `savedTo` path instead of
+        inline rows. Combine `offset` and `limit` to page through large results
+        without loading the entire file into context.
+
+        Returns rows for the requested slice together with pagination metadata:
+        - totalRows: total number of rows in the file
+        - offset: the offset used
+        - limit: the limit used
+        - hasMore: whether more rows exist after this page
+
+        Example workflow:
+        1. Call `execute_dax` — if rows > 50 you get a savedTo path.
+        2. Call `read_query_result(file_path=savedTo, offset=0, limit=100)`.
+        3. If hasMore is true, call again with offset=100, then 200, etc.
+        """
+        try:
+            page = read_csv_page(file_path, offset=offset, limit=limit)
+        except FileNotFoundError:
+            return f"File not found: {file_path!r}. Re-run the DAX query to regenerate it."
+        except Exception as exc:
+            return f"Error reading result file: {exc}"
+
+        return _fmt_json(page)

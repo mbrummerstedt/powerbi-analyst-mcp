@@ -199,8 +199,7 @@ SELECTCOLUMNS(
     "Name",         [Name],
     "TableName",    [Table],
     "Description",  [Description],
-    "FormatString", [FormatString],
-    "Expression",   [Expression]
+    "FormatString", [FormatString]
 )
 ORDER BY [TableName], [Name]
 """.strip()

@@ -104,14 +104,12 @@ def make_measure_dax_row(
     table_name: str = "Sales",
     description: str = "",
     format_string: str = "#,##0",
-    expression: str = "SUM(Sales[Amount])",
 ) -> dict:
     return {
         "Name": name,
         "TableName": table_name,
         "Description": description,
         "FormatString": format_string,
-        "Expression": expression,
     }
 
 

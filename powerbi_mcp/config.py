@@ -19,10 +19,13 @@ class Settings(BaseSettings):
             Use "organizations" to allow any work/school account.
             Use your specific tenant ID (GUID or domain) if the app is
             registered as single-tenant.
+        POWERBI_OUTPUT_DIR: Directory where large DAX query results are saved
+            as CSV files (default: "powerbi_output").
     """
 
     client_id: str
     tenant_id: str = "organizations"
+    output_dir: str = "powerbi_output"
 
     model_config = SettingsConfigDict(
         env_file=".env",
