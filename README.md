@@ -13,9 +13,10 @@ A read-only [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) ser
 | `list_datasets` | List datasets / semantic models in a workspace |
 | `get_dataset_info` | Metadata + last 5 refresh history entries for a dataset |
 | `list_tables` | Visible tables in a dataset |
-| `list_measures` | Measures with name, table, format string, and DAX expression |
+| `list_measures` | Measures with name, table, description, and format string |
 | `list_columns` | Columns / dimensions with data type and key flag |
-| `execute_dax` | Execute any DAX query and return rows as JSON |
+| `execute_dax` | Execute any DAX query; small results returned inline, large results saved to CSV |
+| `read_query_result` | Page through a large CSV result saved by `execute_dax` |
 
 ---
 
@@ -76,6 +77,10 @@ POWERBI_CLIENT_ID=your-application-client-id-here
 
 # Only needed if your app is single-tenant. Otherwise leave as "organizations".
 POWERBI_TENANT_ID=organizations
+
+# Directory where large DAX query results are saved as CSV files (default: "powerbi_output").
+# Can be an absolute path or relative to the server's working directory.
+POWERBI_OUTPUT_DIR=powerbi_output
 ```
 
 ### Step 4 — Log in (one-time)
@@ -153,6 +158,10 @@ Once connected, ask your LLM to follow this sequence naturally:
 6. list_columns          workspace_id=<id>   dataset_id=<id>   [table_name=<name>]
 7. execute_dax           workspace_id=<id>   dataset_id=<id>
                          dax_query="EVALUATE SUMMARIZECOLUMNS(...)"
+                         [result_name="my descriptive name"]   ← names the saved CSV
+                         [max_rows=500]                        ← optional row cap
+8. read_query_result     file_path=<savedTo>   [offset=0]   [limit=100]
+                         ← page through large results without filling context
 ```
 
 ### DAX query examples
@@ -184,6 +193,40 @@ CALCULATETABLE(
 
 ---
 
+### Handling large results
+
+Power BI queries can return up to 100,000 rows. Returning all of that inline would consume most of an LLM's context window. The server handles this automatically:
+
+| Result size | Behaviour |
+|---|---|
+| **≤ 50 rows** | Returned inline as JSON — zero friction, just like a normal tool call |
+| **> 50 rows** | Full result saved to a timestamped CSV; a compact summary is returned instead |
+
+The summary contains `rowCount`, `columns`, a 5-row `preview`, and `savedTo` (the absolute path to the CSV). From there the agent can either read the file directly or page through it with `read_query_result`.
+
+**`execute_dax` parameters for large-result control:**
+
+| Parameter | Type | Description |
+|---|---|---|
+| `result_name` | `str` (optional) | Short label used in the CSV filename — e.g. `"gmv by market 2024"` → `dax_result_gmv_by_market_2024_20260305_143022.csv`. Sanitised to a safe slug, max 40 characters. |
+| `max_rows` | `int` (optional) | Hard cap applied at the Power BI engine level via `TOPN`. Useful for quick sampling without rewriting the DAX. |
+
+**Paging through a saved CSV with `read_query_result`:**
+
+```
+read_query_result(
+    file_path = "/path/from/savedTo",
+    offset    = 0,      # zero-based row offset
+    limit     = 100     # rows per page (default 100)
+)
+```
+
+Returns `rows`, `totalRows`, `offset`, `limit`, and `hasMore`. Increment `offset` by `limit` to fetch the next page.
+
+**Output directory** defaults to `powerbi_output/` relative to the server's working directory. Override with `POWERBI_OUTPUT_DIR` in your `.env`.
+
+---
+
 ## Developer guide
 
 ### Project structure
@@ -198,16 +241,18 @@ powerbi-remote-mcp-server/
 │
 ├── powerbi_mcp/
 │   ├── __init__.py
-│   ├── config.py               # Pydantic BaseSettings (POWERBI_CLIENT_ID, POWERBI_TENANT_ID)
+│   ├── config.py               # Pydantic BaseSettings (POWERBI_CLIENT_ID, POWERBI_TENANT_ID, POWERBI_OUTPUT_DIR)
 │   ├── auth.py                 # MSAL device code flow + OS-native secure token cache
 │   ├── client.py               # Async httpx wrapper around the Power BI REST API
 │   ├── models.py               # Pydantic response models (Workspace, Dataset, etc.)
+│   ├── output.py               # CSV helpers: save_rows_to_csv, read_csv_page
 │   └── tools.py                # All @mcp.tool() registrations
 │
 ├── tests/
 │   ├── conftest.py             # Shared fixtures and mock API payloads
 │   ├── test_models.py          # Pydantic model validation unit tests
 │   ├── test_client.py          # PowerBIClient tests with respx HTTP mocking
+│   ├── test_output.py          # CSV save/read helper unit tests
 │   ├── test_tools.py           # Full-stack MCP tool tests (mock HTTP + auth patch)
 │   └── integration/
 │       └── test_live_api.py    # Real API calls — auto-skipped if no cached token
@@ -249,13 +294,14 @@ The integration tests call the real Power BI REST API and skip automatically if 
 
 ```
 server.py
-  └── Settings (pydantic-settings)   ← reads POWERBI_CLIENT_ID / POWERBI_TENANT_ID
+  └── Settings (pydantic-settings)   ← reads POWERBI_CLIENT_ID / POWERBI_TENANT_ID / POWERBI_OUTPUT_DIR
   └── FastMCP instance
-  └── register_tools(mcp, client_id, tenant_id)
+  └── register_tools(mcp, client_id, tenant_id, output_dir)
         └── PowerBIAuth               ← MSAL PublicClientApplication + PersistedTokenCache
         └── @mcp.tool() functions
               └── PowerBIClient(token) ← httpx async client
                     └── Pydantic models (Workspace, Dataset, …)
+              └── save_rows_to_csv / read_csv_page  ← output.py (large result handling)
 ```
 
 **Key design decisions:**
@@ -264,6 +310,7 @@ server.py
 - **OS-native token storage.** `msal-extensions` persists the token cache using the platform's secure store (Keychain / DPAPI / LibSecret) rather than a plain file.
 - **Pydantic throughout.** Settings are validated at startup; all API responses are parsed into typed Pydantic models before being handled by tools.
 - **Read-only by design.** The two OAuth scopes (`Dataset.Read.All`, `Workspace.Read.All`) and the tool set only allow reads.
+- **Context-window-safe results.** `execute_dax` returns small results (≤ 50 rows) inline and automatically writes larger results to a named CSV file, keeping the agent context lean regardless of query size.
 
 ### Adding a new tool
 
@@ -277,9 +324,10 @@ server.py
 ## Limitations
 
 - **Read-only.** Creation, modification, and deletion of Power BI artefacts are not supported.
-- DAX `execute_dax` limits: 100,000 rows or 1,000,000 values per query.
+- DAX `execute_dax` limits: 100,000 rows or 1,000,000 values per query (Power BI API hard cap).
 - Rate limit: 120 DAX query requests per minute per user.
 - `list_tables`, `list_measures`, and `list_columns` use the DAX `INFO.VIEW.*` functions, which require Import or DirectQuery models with XMLA read access enabled.
+- CSV files written by `execute_dax` are not automatically cleaned up. Manage the `POWERBI_OUTPUT_DIR` directory manually or add your own retention policy.
 
 ---
 

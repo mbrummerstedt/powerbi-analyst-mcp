@@ -8,7 +8,10 @@ a fake token, so no real MSAL flows occur.
 
 from __future__ import annotations
 
+import csv
 import json
+import re
+from pathlib import Path
 from unittest.mock import patch
 
 import pytest
@@ -16,7 +19,7 @@ import respx
 from httpx import Response
 from mcp.server.fastmcp import FastMCP
 
-from powerbi_mcp.tools import register_tools
+from powerbi_mcp.tools import INLINE_ROW_LIMIT, register_tools
 from tests.conftest import (
     DATASET_ID,
     FAKE_TOKEN,
@@ -34,14 +37,14 @@ BASE = "https://api.powerbi.com/v1.0/myorg"
 
 
 @pytest.fixture
-def mcp_with_tools():
+def mcp_with_tools(tmp_path: Path):
     """Create a FastMCP instance with all Power BI tools registered."""
     mcp = FastMCP("Power BI Test")
     with patch(
         "powerbi_mcp.auth.PowerBIAuth.get_token_silent",
         return_value=FAKE_TOKEN,
     ):
-        register_tools(mcp, "fake-client-id")
+        register_tools(mcp, "fake-client-id", output_dir=str(tmp_path))
         yield mcp
 
 
@@ -387,3 +390,150 @@ class TestExecuteDax:
             dax_query="EVALUATE INVALID",
         )
         assert "DAX query error" in result
+
+    @respx.mock
+    async def test_large_result_saves_csv_and_returns_summary(
+        self, mcp_with_tools: FastMCP
+    ):
+        """Results > INLINE_ROW_LIMIT should be saved to CSV; tool returns summary."""
+        large_rows = [{"[x]": i} for i in range(INLINE_ROW_LIMIT + 1)]
+        respx.post(
+            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+        ).mock(return_value=Response(200, json=make_dax_response(large_rows)))
+
+        result = await call(
+            mcp_with_tools, "execute_dax",
+            workspace_id=WORKSPACE_ID,
+            dataset_id=DATASET_ID,
+            dax_query="EVALUATE Sales",
+        )
+        data = json.loads(result)
+        assert data["rowCount"] == INLINE_ROW_LIMIT + 1
+        assert "savedTo" in data
+        assert "columns" in data
+        assert "preview" in data
+        assert len(data["preview"]) <= 5
+        assert Path(data["savedTo"]).exists()
+
+    @respx.mock
+    async def test_result_name_used_in_csv_filename(self, mcp_with_tools: FastMCP):
+        """result_name parameter should appear in the saved CSV filename."""
+        large_rows = [{"[x]": i} for i in range(INLINE_ROW_LIMIT + 1)]
+        respx.post(
+            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+        ).mock(return_value=Response(200, json=make_dax_response(large_rows)))
+
+        result = await call(
+            mcp_with_tools, "execute_dax",
+            workspace_id=WORKSPACE_ID,
+            dataset_id=DATASET_ID,
+            dax_query="EVALUATE Sales",
+            result_name="monthly revenue 2024",
+        )
+        data = json.loads(result)
+        assert "savedTo" in data
+        assert "monthly_revenue_2024" in Path(data["savedTo"]).name
+
+    @respx.mock
+    async def test_small_result_returned_inline(self, mcp_with_tools: FastMCP):
+        """Results <= INLINE_ROW_LIMIT should be returned inline without savedTo."""
+        small_rows = [{"[x]": i} for i in range(INLINE_ROW_LIMIT)]
+        respx.post(
+            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+        ).mock(return_value=Response(200, json=make_dax_response(small_rows)))
+
+        result = await call(
+            mcp_with_tools, "execute_dax",
+            workspace_id=WORKSPACE_ID,
+            dataset_id=DATASET_ID,
+            dax_query="EVALUATE TOPN(50, Sales)",
+        )
+        data = json.loads(result)
+        assert data["rowCount"] == INLINE_ROW_LIMIT
+        assert "rows" in data
+        assert "savedTo" not in data
+
+    @respx.mock
+    async def test_max_rows_wraps_query_in_topn(self, mcp_with_tools: FastMCP):
+        """max_rows parameter should result in a TOPN-wrapped query being sent."""
+        captured: list[str] = []
+
+        def capture(request, route):
+            body = json.loads(request.content)
+            captured.append(body["queries"][0]["query"])
+            return Response(200, json=make_dax_response([{"[x]": 1}]))
+
+        respx.post(
+            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+        ).mock(side_effect=capture)
+
+        await call(
+            mcp_with_tools, "execute_dax",
+            workspace_id=WORKSPACE_ID,
+            dataset_id=DATASET_ID,
+            dax_query="EVALUATE Sales",
+            max_rows=10,
+        )
+        assert captured, "No query was captured"
+        assert "TOPN(10" in captured[0]
+
+
+# ---------------------------------------------------------------------------
+# read_query_result
+# ---------------------------------------------------------------------------
+
+
+def _make_csv(path: Path, n_rows: int) -> Path:
+    """Write a simple CSV with n_rows data rows."""
+    with path.open("w", newline="", encoding="utf-8") as fh:
+        writer = csv.DictWriter(fh, fieldnames=["id", "value"])
+        writer.writeheader()
+        for i in range(n_rows):
+            writer.writerow({"id": i, "value": f"v{i}"})
+    return path
+
+
+class TestReadQueryResult:
+    async def test_first_page(self, mcp_with_tools: FastMCP, tmp_path: Path):
+        csv_file = _make_csv(tmp_path / "result.csv", 200)
+        result = await call(
+            mcp_with_tools, "read_query_result",
+            file_path=str(csv_file),
+            offset=0,
+            limit=50,
+        )
+        data = json.loads(result)
+        assert len(data["rows"]) == 50
+        assert data["totalRows"] == 200
+        assert data["hasMore"] is True
+        assert data["offset"] == 0
+
+    async def test_last_page_has_more_false(self, mcp_with_tools: FastMCP, tmp_path: Path):
+        csv_file = _make_csv(tmp_path / "result.csv", 10)
+        result = await call(
+            mcp_with_tools, "read_query_result",
+            file_path=str(csv_file),
+            offset=8,
+            limit=10,
+        )
+        data = json.loads(result)
+        assert len(data["rows"]) == 2
+        assert data["hasMore"] is False
+
+    async def test_file_not_found_returns_friendly_message(
+        self, mcp_with_tools: FastMCP, tmp_path: Path
+    ):
+        result = await call(
+            mcp_with_tools, "read_query_result",
+            file_path=str(tmp_path / "nonexistent.csv"),
+        )
+        assert "File not found" in result
+
+    async def test_default_limit_is_100(self, mcp_with_tools: FastMCP, tmp_path: Path):
+        csv_file = _make_csv(tmp_path / "result.csv", 300)
+        result = await call(
+            mcp_with_tools, "read_query_result",
+            file_path=str(csv_file),
+        )
+        data = json.loads(result)
+        assert len(data["rows"]) == 100

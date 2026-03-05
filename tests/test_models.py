@@ -134,13 +134,11 @@ class TestMeasure:
         assert m.name == "Total Sales"
         assert m.table_name == "Sales"
         assert m.format_string == "#,##0"
-        assert m.expression == "SUM(Sales[Amount])"
 
     def test_optional_fields_default_to_none(self):
         m = Measure.model_validate({"Name": "M", "TableName": "T"})
         assert m.description is None
         assert m.format_string is None
-        assert m.expression is None
 
     def test_missing_name_raises(self):
         with pytest.raises(ValidationError):

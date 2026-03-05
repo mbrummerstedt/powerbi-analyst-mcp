@@ -77,7 +77,6 @@ class Measure(BaseModel):
     table_name: str = Field(alias="TableName")
     description: Optional[str] = Field(None, alias="Description")
     format_string: Optional[str] = Field(None, alias="FormatString")
-    expression: Optional[str] = Field(None, alias="Expression")
 
 
 class Column(BaseModel):
