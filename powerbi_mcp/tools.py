@@ -45,11 +45,19 @@ def register_tools(
     output_dir:
         Directory where large DAX query results are saved as CSV files.
     """
-    _auth = PowerBIAuth(client_id, tenant_id)
+    _auth: PowerBIAuth | None = None
+
+    def _get_auth() -> PowerBIAuth:
+        """Lazily create the PowerBIAuth instance on first use."""
+        nonlocal _auth
+        if _auth is None:
+            _auth = PowerBIAuth(client_id, tenant_id)
+        return _auth
 
     def _get_client() -> PowerBIClient:
         """Return an authenticated API client, raising if no token is available."""
-        token = _auth.get_token_silent()
+        auth = _get_auth()
+        token = auth.get_token_silent()
         if token is None:
             raise RuntimeError(
                 "Not authenticated. Call the `authenticate` tool first, then retry."
@@ -76,19 +84,20 @@ def register_tools(
         """
         import asyncio
 
-        token = _auth.get_token_silent()
+        auth = _get_auth()
+        token = auth.get_token_silent()
         if token:
             return "Already authenticated. No action needed."
 
         # Phase 2: complete a pending flow started in a previous call
-        pending = getattr(_auth, "_pending_flow", None)
+        pending = getattr(auth, "_pending_flow", None)
         if pending:
             try:
                 loop = asyncio.get_event_loop()
                 result = await asyncio.wait_for(
                     loop.run_in_executor(
                         None,
-                        lambda: _auth.app.acquire_token_by_device_flow(pending),
+                        lambda: auth.app.acquire_token_by_device_flow(pending),
                     ),
                     timeout=60.0,
                 )
@@ -99,7 +108,7 @@ def register_tools(
                 )
 
             if "access_token" in result:
-                _auth._pending_flow = None
+                auth._pending_flow = None
                 return "Authentication successful! You can now use all Power BI tools."
 
             error = result.get("error", "unknown")
@@ -110,7 +119,7 @@ def register_tools(
                 )
 
             # Flow expired or failed — clear so the next call starts fresh
-            _auth._pending_flow = None
+            auth._pending_flow = None
             return (
                 f"Authentication failed ({error}): "
                 f"{result.get('error_description', 'unknown error')}. "
@@ -118,7 +127,7 @@ def register_tools(
             )
 
         # Phase 1: start a new device code flow and return the URL + code
-        flow = _auth.initiate_device_flow()
+        flow = auth.initiate_device_flow()
         verification_uri = flow.get("verification_uri", "https://microsoft.com/devicelogin")
         user_code = flow["user_code"]
 
@@ -137,8 +146,9 @@ def register_tools(
 
         After logging out, call `authenticate` to sign in again.
         """
-        _auth._pending_flow = None
-        _auth.clear_cache()
+        auth = _get_auth()
+        auth._pending_flow = None
+        auth.clear_cache()
         return "Logged out. Cached credentials have been cleared. Call `authenticate` to sign in again."
 
     @mcp.tool()
