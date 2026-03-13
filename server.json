@@ -2,13 +2,13 @@
   "$schema": "https://static.modelcontextprotocol.io/schemas/2025-12-11/server.schema.json",
   "name": "io.github.mbrummerstedt/powerbi-analyst-mcp",
   "title": "Power BI Analyst MCP",
-  "description": "Connect LLMs to Power BI semantic models. Browse workspaces, tables, and measures, run DAX queries, and handle large results via local CSV with paged reading.",
-  "version": "0.1.0",
+  "description": "Browse Power BI workspaces, run DAX queries, and page through large results.",
+  "version": "0.1.1",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "powerbi-analyst-mcp",
-      "version": "0.1.0",
+      "version": "0.1.1",
       "transport": {
         "type": "stdio"
       },
