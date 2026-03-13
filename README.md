@@ -7,6 +7,10 @@
 [![Tests](https://img.shields.io/github/actions/workflow/status/mbrummerstedt/powerbi-analyst-mcp/tests.yml?label=tests)](https://github.com/mbrummerstedt/powerbi-analyst-mcp/actions)
 [![License: MIT](https://img.shields.io/github/license/mbrummerstedt/powerbi-analyst-mcp)](LICENSE)
 
+<a href="https://glama.ai/mcp/servers/mbrummerstedt/powerbi-analyst-mcp">
+  <img width="380" height="200" src="https://glama.ai/mcp/servers/mbrummerstedt/powerbi-analyst-mcp/badge" alt="powerbi-analyst-mcp MCP server" />
+</a>
+
 **Ask Claude to analyse your Power BI data. Get answers — not context-window crashes.**
 
 Connect Claude (or any MCP client) to your Power BI semantic models. Explore tables and measures, run DAX queries, and work with real results — even across datasets with tens of thousands of rows. Large query results are automatically saved to a local file and paged to the agent on demand, so your AI session stays fast and focused no matter how much data you pull.
