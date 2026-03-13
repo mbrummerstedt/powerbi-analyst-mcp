@@ -3,12 +3,12 @@
   "name": "io.github.mbrummerstedt/powerbi-analyst-mcp",
   "title": "Power BI Analyst MCP",
   "description": "Browse Power BI workspaces, run DAX queries, and page through large results.",
-  "version": "0.1.1",
+  "version": "0.1.2",
   "packages": [
     {
       "registryType": "pypi",
       "identifier": "powerbi-analyst-mcp",
-      "version": "0.1.1",
+      "version": "0.1.2",
       "transport": {
         "type": "stdio"
       },
