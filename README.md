@@ -1,23 +1,99 @@
 # Power BI Analyst MCP
 
-A read-only [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) server that connects an LLM (Claude, Cursor, etc.) to your Power BI semantic models. Every request runs under your own Power BI account via **OAuth 2.0 delegated permissions** — the server never has credentials of its own.
+[![PyPI](https://img.shields.io/pypi/v/powerbi-analyst-mcp)](https://pypi.org/project/powerbi-analyst-mcp/)
+[![Python](https://img.shields.io/pypi/pyversions/powerbi-analyst-mcp)](https://pypi.org/project/powerbi-analyst-mcp/)
+[![Tests](https://img.shields.io/github/actions/workflow/status/mbrummerstedt/powerbi-analyst-mcp/tests.yml?label=tests)](https://github.com/mbrummerstedt/powerbi-analyst-mcp/actions)
+[![License: MIT](https://img.shields.io/github/license/mbrummerstedt/powerbi-analyst-mcp)](LICENSE)
+
+**Ask Claude to analyse your Power BI data. Get answers — not context-window crashes.**
+
+Connect Claude (or any MCP client) to your Power BI semantic models. Explore tables and measures, run DAX queries, and work with real results — even across datasets with tens of thousands of rows. Large query results are automatically saved to a local file and paged to the agent on demand, so your AI session stays fast and focused no matter how much data you pull.
+
+Everything runs on your machine. Your data never passes through a third-party relay.
+
+---
+
+## What becomes possible
+
+The analytics bottleneck has never really been data access — Power BI already gives people access. The bottleneck is translation: the skilled, time-consuming work of turning data into a decision. This server moves that translation to an LLM.
+
+**Compound reasoning across your entire model**
+A human analyst runs one query, reads the result, forms a hypothesis, runs another query. This serialises over hours. An agent can run twenty queries in sequence — each informed by the last — synthesise across all of them, and deliver a reasoned conclusion in minutes. Ask "what's driving the margin decline in EMEA?" and Claude will explore measures, drill into markets, check time trends, isolate the outlier, and explain it — without you directing each step.
+
+**Natural language analytics for everyone**
+Any stakeholder can ask a data question and get a real answer backed by live DAX — without knowing what DAX is, without filing a ticket, without waiting. The translation layer that used to require a trained analyst runs on demand.
+
+**Proactive anomaly detection**
+Run Claude on a schedule against your key measures. It queries the data, compares to prior periods, and flags anything outside expected ranges in plain English — before anyone has to open a dashboard to find out something went wrong.
+
+**Self-documenting semantic models**
+"List every measure in this dataset and explain what it calculates." Claude explores the schema and produces a data dictionary — useful for onboarding, governance, and anyone trying to understand what a model actually contains.
+
+**Large datasets, handled automatically**
+Power BI queries can return tens of thousands of rows. Returning all of that inline would consume most of an LLM's context window and crash the session. This server saves large results to a local CSV and gives the agent a compact summary — row count, column names, 5-row preview — then lets it page through the file on demand. You get the full dataset. The AI session stays lean.
+
+**Query history that compounds over time**
+Every successful DAX query is logged locally in a JSONL audit trail — what the user asked, the DAX that was generated, the columns returned, and where the CSV was saved. In the next session, the agent searches this history to find relevant prior work: reusable DAX patterns, previously computed result files, and context from earlier analyses. The more you use it, the faster and smarter it gets — and you always have an audit trail of where every number came from.
+
+**Your data stays on your machine**
+Queries, results, and tokens never pass through a cloud relay. The server runs locally, authenticates via the same OAuth device code flow as the Power BI web app, and stores tokens in your OS's native secure store (Keychain / DPAPI / LibSecret).
+
+---
+
+## How it compares to Microsoft's official MCP servers
+
+Microsoft publishes two MCP servers for Power BI. This one is different in purpose and architecture from both.
+
+|  | **This server** | [Microsoft Remote MCP](https://learn.microsoft.com/en-us/power-bi/developer/mcp/mcp-servers-overview#remote-power-bi-mcp-server) | [Microsoft Modeling MCP](https://learn.microsoft.com/en-us/power-bi/developer/mcp/mcp-servers-overview#power-bi-modeling-mcp-server) |
+|---|---|---|---|
+| **Purpose** | Query and analyse existing models | Query existing models | Build and modify models |
+| **Runs** | Locally on your machine | Microsoft's cloud infrastructure | Locally (Power BI Desktop) |
+| **Data path** | Direct to Power BI REST API | Via Microsoft's MCP relay | Local XMLA |
+| **Auth** | OAuth device code (delegated) | OAuth via remote service | Local session |
+| **Large results** | Auto-saved to local CSV | In-context only | N/A |
+| **Read-only** | Yes | Yes | No |
+| **Who it's for** | Analysts using Claude / Cursor | Analysts using Copilot | Model developers |
+
+---
+
+## What it looks like
+
+```
+You: Analyse revenue by market and product category for Q1 2025
+
+Claude: Let me explore the dataset first.
+        [calls list_tables → list_measures → execute_dax]
+
+        The query returned 73,840 rows — saved to:
+        ~/powerbi_output/dax_result_revenue_q1_2025_20260313_091204.csv
+
+        [pages through results with read_query_result]
+
+        Summary: EMEA leads at 44% of total revenue. The top category
+        is Premium Hardware in both EMEA and AMER. APAC shows the
+        strongest quarter-over-quarter growth at +18%...
+```
+
+The agent explores the schema, writes the DAX, handles the file, and delivers the analysis — without you touching the Power BI UI.
 
 ---
 
 ## Tools
 
-| Tool | Description |
+| Tool | What it does |
 |---|---|
-| `authenticate` | OAuth device code flow — first call returns a URL + code; second call completes sign-in |
-| `logout` | Clear cached credentials (forces re-authentication on next call) |
-| `list_workspaces` | List workspaces the user belongs to |
+| `authenticate` | Sign in via OAuth device code — returns a URL + one-time code; call again to complete |
+| `logout` | Clear the cached token (forces re-authentication) |
+| `list_workspaces` | List all workspaces you have access to |
 | `list_datasets` | List datasets / semantic models in a workspace |
-| `get_dataset_info` | Metadata + last 5 refresh history entries for a dataset |
-| `list_tables` | Visible tables in a dataset |
+| `get_dataset_info` | Metadata and last 5 refresh history entries for a dataset |
+| `list_tables` | All visible tables in a dataset |
 | `list_measures` | Measures with name, table, description, and format string |
-| `list_columns` | Columns / dimensions with data type and key flag |
-| `execute_dax` | Execute any DAX query; small results returned inline, large results saved to CSV |
-| `read_query_result` | Page through a large CSV result saved by `execute_dax` |
+| `list_columns` | Columns with data type and key flag |
+| `execute_dax` | Run a DAX query — inline for small results, local CSV for large ones. Pass `query_summary` to log the query for future reference. |
+| `read_query_result` | Page through a large CSV result without loading it all into context |
+| `search_query_history` | Search the local query log by keyword, dataset, or time range — find prior DAX and results across sessions |
+| `delete_query_log_entry` | Remove a query log entry (e.g. when the approach turned out to be wrong) |
 
 ---
 
@@ -27,74 +103,36 @@ A read-only [Model Context Protocol (MCP)](https://modelcontextprotocol.io/) ser
 
 - Python 3.11+
 - A Power BI Pro, Premium Per User (PPU), or Premium capacity licence
-- An Azure AD app registration (free, takes ~5 minutes — see below)
+- An Azure AD app registration (free, ~5 minutes — see below)
 
 ### Step 1 — Create an Azure AD app registration
 
-OAuth 2.0 requires a **client ID** to identify which application is acting on your behalf. The registration is free, requires no client secret, and needs no Power BI admin consent for the two read-only scopes used here.
+OAuth 2.0 requires a **client ID** to identify which application is acting on your behalf. The registration is free, requires no client secret, and does not need Power BI admin consent for the two read-only scopes used here.
 
 1. Go to [portal.azure.com](https://portal.azure.com) → **Azure Active Directory** → **App registrations** → **New registration**.
-2. Give it a name (e.g. `PowerBI MCP Server`). For supported account types, choose **Accounts in this organizational directory only** (single-tenant) or **Accounts in any organizational directory** (multi-tenant). Click **Register**.
-3. Under **Authentication** → **Platform configurations**, add **Mobile and desktop applications** and tick the redirect URI:
+2. Name it (e.g. `PowerBI MCP`). For account types choose **Accounts in this organizational directory only** (single-tenant). Click **Register**.
+3. Under **Authentication** → **Platform configurations**, add **Mobile and desktop applications** and tick this redirect URI:
    ```
    https://login.microsoftonline.com/common/oauth2/nativeclient
    ```
 4. Still under **Authentication** → **Advanced settings**, set **Allow public client flows** to **Yes**. Save.
-5. Under **API permissions** → **Add a permission** → **Power BI Service**, add these two delegated permissions:
+5. Under **API permissions** → **Add a permission** → **Power BI Service**, add:
    - `Dataset.Read.All`
    - `Workspace.Read.All`
 
    If your tenant requires admin consent, ask an admin to grant it.
-6. Copy the **Application (client) ID** from the Overview page — you will need it in the next step.
 
-> **Tip:** If your app registration is single-tenant, you also need your **Directory (tenant) ID** from the same Overview page. Multi-tenant registrations can leave `POWERBI_TENANT_ID` at its default (`organizations`).
+6. From the **Overview** page, copy both of these — you will need them in Step 2:
+   - **Application (client) ID**
+   - **Directory (tenant) ID**
 
 > **Note:** The Power BI tenant setting **"Dataset Execute Queries REST API"** must be enabled in the Power BI Admin Portal (Integration settings) for `execute_dax` to work.
 
 ---
 
-### Step 2 — Install
+### Step 2 — Install and connect
 
-**Recommended — install with `uv` (no venv management needed):**
-
-```bash
-pip install uv   # if you don't have uv yet
-```
-
-**Alternative — install with pip:**
-
-```bash
-pip install powerbi-analyst-mcp
-```
-
-**Manual — clone and install from source:**
-
-```bash
-git clone https://github.com/mbrummerstedt/powerbi-analyst-mcp.git
-cd powerbi-analyst-mcp
-pip install .
-```
-
-### Step 3 — Configure
-
-```bash
-cp .env.example .env
-```
-
-Open `.env` and fill in your values:
-
-```dotenv
-POWERBI_CLIENT_ID=your-application-client-id-here
-
-# Only needed if your app is single-tenant. Otherwise leave as "organizations".
-POWERBI_TENANT_ID=organizations
-
-# Directory where large DAX query results are saved as CSV files (default: "powerbi_output").
-# Can be an absolute path or relative to the server's working directory.
-POWERBI_OUTPUT_DIR=powerbi_output
-```
-
-### Step 4 — Connect to your MCP client
+The server is published on PyPI. The fastest way to run it is with `uvx`, which requires no manual install or virtual environment.
 
 #### Claude Desktop
 
@@ -107,17 +145,19 @@ Add the following to your `claude_desktop_config.json`:
       "command": "uvx",
       "args": ["powerbi-analyst-mcp"],
       "env": {
-        "POWERBI_CLIENT_ID": "your-client-id",
-        "POWERBI_TENANT_ID": "organizations"
+        "POWERBI_CLIENT_ID": "your-application-client-id",
+        "POWERBI_TENANT_ID": "your-directory-tenant-id"
       }
     }
   }
 }
 ```
 
-The `claude_desktop_config.json` is located at:
+The config file is at:
 - **macOS**: `~/Library/Application Support/Claude/claude_desktop_config.json`
 - **Windows**: `%APPDATA%\Claude\claude_desktop_config.json`
+
+> **`POWERBI_TENANT_ID` is required for almost all users.** Most organisations have a single Azure AD tenant. Set this to your **Directory (tenant) ID** from Step 1. Leaving it as `organizations` (the default) will cause authentication to fail or target the wrong tenant.
 
 #### Cursor
 
@@ -130,24 +170,26 @@ Add a `.cursor/mcp.json` file in your project (or use the global config):
       "command": "uvx",
       "args": ["powerbi-analyst-mcp"],
       "env": {
-        "POWERBI_CLIENT_ID": "your-client-id"
+        "POWERBI_CLIENT_ID": "your-application-client-id",
+        "POWERBI_TENANT_ID": "your-directory-tenant-id"
       }
     }
   }
 }
 ```
 
-#### Alternative (without uv)
+#### pip install (alternative)
 
-If you installed via `pip install powerbi-analyst-mcp`, replace `"command": "uvx"` + `"args": ["powerbi-analyst-mcp"]` with:
+```bash
+pip install powerbi-analyst-mcp
+```
 
+Then replace the `uvx` command block with:
 
 ```json
 "command": "powerbi-analyst-mcp",
 "args": []
 ```
-
-Or point directly at the installed script path.
 
 ---
 
@@ -163,11 +205,13 @@ Once connected, ask your LLM to follow this sequence naturally:
 4. list_tables           workspace_id=<id>   dataset_id=<id>
 5. list_measures         workspace_id=<id>   dataset_id=<id>   [table_name=<name>]
 6. list_columns          workspace_id=<id>   dataset_id=<id>   [table_name=<name>]
-7. execute_dax           workspace_id=<id>   dataset_id=<id>
+7. search_query_history  [keyword="revenue"]  ← check if similar work exists from a prior session
+8. execute_dax           workspace_id=<id>   dataset_id=<id>
                          dax_query="EVALUATE SUMMARIZECOLUMNS(...)"
-                         [result_name="my descriptive name"]   ← names the saved CSV
-                         [max_rows=500]                        ← optional row cap
-8. read_query_result     file_path=<savedTo>   [offset=0]   [limit=100]
+                         [query_summary="Revenue by market and product for Q1 2025"]
+                         [result_name="revenue by market q1"]  ← names the saved CSV
+                         [max_rows=500]                        ← optional row cap for sampling
+9. read_query_result     file_path=<savedTo>   [offset=0]   [limit=100]
                          ← page through large results without filling context
 ```
 
@@ -200,25 +244,20 @@ CALCULATETABLE(
 
 ---
 
-### Handling large results
+### Large result handling — in detail
 
-Power BI queries can return up to 100,000 rows. Returning all of that inline would consume most of an LLM's context window. The server handles this automatically:
-
-| Result size | Behaviour |
+| Result size | What happens |
 |---|---|
-| **≤ 50 rows** | Returned inline as JSON — zero friction, just like a normal tool call |
-| **> 50 rows** | Full result saved to a timestamped CSV; a compact summary is returned instead |
+| **≤ 50 rows** | Returned inline as JSON — zero friction |
+| **> 50 rows** | Full result saved to a timestamped CSV; agent receives a compact summary |
 
-The summary contains `rowCount`, `columns`, a 5-row `preview`, and `savedTo` (the absolute path to the CSV). From there the agent can either read the file directly or page through it with `read_query_result`.
+The summary returned for large results contains:
+- `rowCount` — total rows written
+- `columns` — column names and types
+- `preview` — first 5 rows
+- `savedTo` — absolute path to the CSV file
 
-**`execute_dax` parameters for large-result control:**
-
-| Parameter | Type | Description |
-|---|---|---|
-| `result_name` | `str` (optional) | Short label used in the CSV filename — e.g. `"gmv by market 2024"` → `dax_result_gmv_by_market_2024_20260305_143022.csv`. Sanitised to a safe slug, max 40 characters. |
-| `max_rows` | `int` (optional) | Hard cap applied at the Power BI engine level via `TOPN`. Useful for quick sampling without rewriting the DAX. |
-
-**Paging through a saved CSV with `read_query_result`:**
+The agent can then page through the file with `read_query_result`:
 
 ```
 read_query_result(
@@ -230,115 +269,25 @@ read_query_result(
 
 Returns `rows`, `totalRows`, `offset`, `limit`, and `hasMore`. Increment `offset` by `limit` to fetch the next page.
 
-**Output directory** defaults to `powerbi_output/` relative to the server's working directory. Override with `POWERBI_OUTPUT_DIR` in your `.env`.
+**`execute_dax` parameters for controlling result size:**
 
----
+| Parameter | Type | Description |
+|---|---|---|
+| `query_summary` | `str` (optional) | Short description of what the user asked for — logged to the local query history for auditability and cross-session reuse. |
+| `result_name` | `str` (optional) | Short label used in the CSV filename — e.g. `"gmv by market 2024"` → `dax_result_gmv_by_market_2024_20260305_143022.csv`. Max 40 characters. |
+| `max_rows` | `int` (optional) | Hard cap applied via `TOPN` at the Power BI engine level. Useful for quick sampling without rewriting the DAX. |
 
-## Developer guide
-
-### Project structure
-
-```
-powerbi-analyst-mcp/
-├── pyproject.toml              # Package metadata and entry point (powerbi-analyst-mcp)
-├── server.py                   # CLI wrapper: handles --login flag for terminal auth
-├── requirements.txt            # Runtime dependencies (mirrors pyproject.toml)
-├── requirements-dev.txt        # Test dependencies (pytest, respx)
-├── pytest.ini                  # asyncio_mode = auto
-├── .env.example                # Environment variable template
-│
-├── powerbi_mcp/
-│   ├── __init__.py
-│   ├── __main__.py             # Enables: python -m powerbi_mcp
-│   ├── app.py                  # FastMCP instance, settings, main() entry point
-│   ├── config.py               # Pydantic BaseSettings (POWERBI_CLIENT_ID, POWERBI_TENANT_ID, POWERBI_OUTPUT_DIR)
-│   ├── auth.py                 # MSAL device code flow + OS-native secure token cache
-│   ├── client.py               # Async httpx wrapper around the Power BI REST API
-│   ├── models.py               # Pydantic response models (Workspace, Dataset, etc.)
-│   ├── output.py               # CSV helpers: save_rows_to_csv, read_csv_page
-│   └── tools.py                # All @mcp.tool() registrations
-│
-├── tests/
-│   ├── conftest.py             # Shared fixtures and mock API payloads
-│   ├── test_models.py          # Pydantic model validation unit tests
-│   ├── test_client.py          # PowerBIClient tests with respx HTTP mocking
-│   ├── test_output.py          # CSV save/read helper unit tests
-│   ├── test_tools.py           # Full-stack MCP tool tests (mock HTTP + auth patch)
-│   └── integration/
-│       └── test_live_api.py    # Real API calls — auto-skipped if no cached token
-│
-└── .github/workflows/tests.yml # CI: runs mock test suite on every push / PR
-```
-
-### Set up a development environment
-
-```bash
-git clone https://github.com/mbrummerstedt/powerbi-analyst-mcp.git
-cd powerbi-analyst-mcp
-
-python -m venv .venv
-source .venv/bin/activate
-
-pip install -e ".[dev]"
-# or: pip install -r requirements.txt -r requirements-dev.txt
-```
-
-If you use [direnv](https://direnv.net/), the `.envrc` file activates the virtual environment automatically when you `cd` into the project.
-
-### Running the tests
-
-**Mock tests** (no credentials needed — safe for CI):
-
-```bash
-pytest tests/ -v
-```
-
-**Integration tests** (requires a cached login token — run `python server.py --login` first):
-
-```bash
-pytest tests/integration/ -v
-```
-
-The integration tests call the real Power BI REST API and skip automatically if no token is cached, so they never block CI.
-
-### Architecture overview
-
-```
-powerbi_mcp/app.py
-  └── Settings (pydantic-settings)   ← reads POWERBI_CLIENT_ID / POWERBI_TENANT_ID / POWERBI_OUTPUT_DIR
-  └── FastMCP instance
-  └── register_tools(mcp, client_id, tenant_id, output_dir)
-        └── PowerBIAuth               ← MSAL PublicClientApplication + PersistedTokenCache
-        └── @mcp.tool() functions
-              └── PowerBIClient(token) ← httpx async client
-                    └── Pydantic models (Workspace, Dataset, …)
-              └── save_rows_to_csv / read_csv_page  ← output.py (large result handling)
-```
-
-**Key design decisions:**
-
-- **No service principal.** Authentication uses the device code flow (delegated OAuth 2.0), so data access is always scoped to the signed-in user's own Power BI permissions.
-- **OS-native token storage.** `msal-extensions` persists the token cache using the platform's secure store (Keychain / DPAPI / LibSecret) rather than a plain file.
-- **Pydantic throughout.** Settings are validated at startup; all API responses are parsed into typed Pydantic models before being handled by tools.
-- **Read-only by design.** The two OAuth scopes (`Dataset.Read.All`, `Workspace.Read.All`) and the tool set only allow reads.
-- **Context-window-safe results.** `execute_dax` returns small results (≤ 50 rows) inline and automatically writes larger results to a named CSV file, keeping the agent context lean regardless of query size.
-
-### Adding a new tool
-
-1. Add a method to `PowerBIClient` in `powerbi_mcp/client.py`.
-2. If the response shape is new, add a Pydantic model in `powerbi_mcp/models.py`.
-3. Register a `@mcp.tool()` function in `powerbi_mcp/tools.py` inside `register_tools`.
-4. Add tests in `tests/test_tools.py` (mock) and optionally `tests/integration/test_live_api.py`.
+**Output directory** defaults to `~/powerbi_output`. Override with `POWERBI_OUTPUT_DIR` in your MCP client's `env` block. CSV files and the query history log are not automatically cleaned up — manage the directory manually or add a retention policy.
 
 ---
 
 ## Limitations
 
 - **Read-only.** Creation, modification, and deletion of Power BI artefacts are not supported.
-- DAX `execute_dax` limits: 100,000 rows or 1,000,000 values per query (Power BI API hard cap).
+- `execute_dax` limits: 100,000 rows or 1,000,000 values per query (Power BI API hard cap).
 - Rate limit: 120 DAX query requests per minute per user.
 - `list_tables`, `list_measures`, and `list_columns` use the DAX `INFO.VIEW.*` functions, which require Import or DirectQuery models with XMLA read access enabled.
-- CSV files written by `execute_dax` are not automatically cleaned up. Manage the `POWERBI_OUTPUT_DIR` directory manually or add your own retention policy.
+- CSV files written by `execute_dax` are not automatically cleaned up.
 
 ---
 
@@ -347,7 +296,13 @@ powerbi_mcp/app.py
 - Tokens are persisted using OS-native secure storage via [`msal-extensions`](https://github.com/AzureAD/microsoft-authentication-extensions-for-python):
   - **macOS** — Keychain
   - **Windows** — DPAPI-encrypted file
-  - **Linux** — LibSecret (gnome-keyring / KWallet); falls back to an encrypted file if LibSecret is unavailable
+  - **Linux** — LibSecret (gnome-keyring / KWallet); falls back to an encrypted file if unavailable
 - The cache file is written to `~/.powerbi_mcp_token_cache.bin` and is covered by `.gitignore`.
 - The server never logs access tokens.
 - All data access is gated by the user's own Power BI permissions (delegated OAuth 2.0 — no service principal, no client secret).
+
+---
+
+## Contributing
+
+See [CONTRIBUTING.md](CONTRIBUTING.md) for project structure, dev environment setup, architecture notes, and how to add new tools.
