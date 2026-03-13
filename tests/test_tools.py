@@ -59,30 +59,102 @@ async def call(mcp: FastMCP, tool_name: str, **kwargs) -> str:
 # ---------------------------------------------------------------------------
 
 
+FAKE_FLOW = {
+    "user_code": "ABC123",
+    "verification_uri": "https://microsoft.com/devicelogin",
+    "expires_at": 9_999_999_999,
+}
+
+
 class TestAuthenticate:
     async def test_already_authenticated_short_circuits(self, mcp_with_tools: FastMCP):
         result = await call(mcp_with_tools, "authenticate")
         assert "Already authenticated" in result
 
-    async def test_no_token_initiates_flow(self):
+    async def test_phase1_no_token_returns_url_and_code(self):
         """Phase 1: no token → returns URL + code, instructs user to call again."""
         mcp = FastMCP("Power BI Test")
-        with patch(
-            "powerbi_mcp.auth.PowerBIAuth.get_token_silent",
-            return_value=None,
-        ), patch(
-            "powerbi_mcp.auth.PowerBIAuth.initiate_device_flow",
-            return_value={
-                "message": "Go to https://microsoft.com/devicelogin",
-                "user_code": "ABC123",
-                "verification_uri": "https://microsoft.com/devicelogin",
-            },
-        ):
+        with patch("powerbi_mcp.auth.PowerBIAuth.get_token_silent", return_value=None), \
+             patch("msal.PublicClientApplication.initiate_device_flow", return_value=FAKE_FLOW):
             register_tools(mcp, "fake-client-id")
             result = await call(mcp, "authenticate")
         assert "ABC123" in result
         assert "microsoft.com/devicelogin" in result
-        assert "authenticate" in result  # instructs user to call again
+        assert "authenticate" in result
+
+    async def test_phase2_success_clears_pending_flow(self):
+        """Phase 2: pending flow + successful token acquisition → success message."""
+        mcp = FastMCP("Power BI Test")
+        with patch("powerbi_mcp.auth.PowerBIAuth.get_token_silent", return_value=None), \
+             patch("msal.PublicClientApplication.initiate_device_flow", return_value=FAKE_FLOW), \
+             patch(
+                 "msal.PublicClientApplication.acquire_token_by_device_flow",
+                 return_value={"access_token": "new-token"},
+             ):
+            register_tools(mcp, "fake-client-id")
+            await call(mcp, "authenticate")   # Phase 1 — sets _pending_flow
+            result = await call(mcp, "authenticate")  # Phase 2 — completes flow
+        assert "Authentication successful" in result
+
+    async def test_phase2_authorization_pending_instructs_retry(self):
+        """Phase 2: user hasn't finished signing in → friendly wait message."""
+        mcp = FastMCP("Power BI Test")
+        with patch("powerbi_mcp.auth.PowerBIAuth.get_token_silent", return_value=None), \
+             patch("msal.PublicClientApplication.initiate_device_flow", return_value=FAKE_FLOW), \
+             patch(
+                 "msal.PublicClientApplication.acquire_token_by_device_flow",
+                 return_value={"error": "authorization_pending", "error_description": "Still waiting"},
+             ):
+            register_tools(mcp, "fake-client-id")
+            await call(mcp, "authenticate")   # Phase 1
+            result = await call(mcp, "authenticate")  # Phase 2
+        assert "Still waiting" in result or "waiting" in result.lower()
+        assert "authenticate" in result
+
+    async def test_phase2_flow_failure_clears_pending_and_instructs_restart(self):
+        """Phase 2: expired or rejected flow → clears pending flow, tells user to restart."""
+        mcp = FastMCP("Power BI Test")
+        with patch("powerbi_mcp.auth.PowerBIAuth.get_token_silent", return_value=None), \
+             patch("msal.PublicClientApplication.initiate_device_flow", return_value=FAKE_FLOW), \
+             patch(
+                 "msal.PublicClientApplication.acquire_token_by_device_flow",
+                 return_value={"error": "code_expired", "error_description": "Code has expired"},
+             ):
+            register_tools(mcp, "fake-client-id")
+            await call(mcp, "authenticate")   # Phase 1
+            result = await call(mcp, "authenticate")  # Phase 2 — fails
+        assert "code_expired" in result or "failed" in result.lower()
+        assert "authenticate" in result  # instructs user to restart
+
+
+# ---------------------------------------------------------------------------
+# logout
+# ---------------------------------------------------------------------------
+
+
+class TestLogout:
+    async def test_clears_cache_and_returns_confirmation(self, mcp_with_tools: FastMCP):
+        with patch("powerbi_mcp.auth.PowerBIAuth.clear_cache") as mock_clear:
+            result = await call(mcp_with_tools, "logout")
+        mock_clear.assert_called_once()
+        assert "Logged out" in result
+
+    async def test_clears_pending_flow(self):
+        """logout should discard any in-progress device flow."""
+        mcp = FastMCP("Power BI Test")
+        with patch("powerbi_mcp.auth.PowerBIAuth.get_token_silent", return_value=None), \
+             patch("msal.PublicClientApplication.initiate_device_flow", return_value=FAKE_FLOW), \
+             patch("powerbi_mcp.auth.PowerBIAuth.clear_cache"):
+            register_tools(mcp, "fake-client-id")
+            await call(mcp, "authenticate")   # Phase 1 — sets _pending_flow
+            await call(mcp, "logout")         # should clear it
+
+            # Next authenticate call should start Phase 1 again, not Phase 2
+            with patch(
+                "msal.PublicClientApplication.initiate_device_flow", return_value=FAKE_FLOW
+            ):
+                result = await call(mcp, "authenticate")
+        assert "ABC123" in result  # Phase 1 response, not Phase 2
 
 
 # ---------------------------------------------------------------------------
@@ -541,3 +613,120 @@ class TestReadQueryResult:
         )
         data = json.loads(result)
         assert len(data["rows"]) == 100
+
+
+# ---------------------------------------------------------------------------
+# execute_dax — history logging
+# ---------------------------------------------------------------------------
+
+
+class TestExecuteDaxHistoryLogging:
+    @respx.mock
+    async def test_inline_result_includes_history_entry_id(self, mcp_with_tools: FastMCP):
+        """Small results should still log to history and include the entry ID."""
+        respx.post(
+            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+        ).mock(return_value=Response(200, json=make_dax_response([{"[x]": 1}])))
+
+        result = await call(
+            mcp_with_tools, "execute_dax",
+            workspace_id=WORKSPACE_ID,
+            dataset_id=DATASET_ID,
+            dax_query="EVALUATE Sales",
+            query_summary="Quick test query",
+        )
+        data = json.loads(result)
+        assert "historyEntryId" in data
+        assert len(data["historyEntryId"]) == 36  # UUID4
+
+    @respx.mock
+    async def test_large_result_includes_history_entry_id(self, mcp_with_tools: FastMCP):
+        """Large CSV results should also log to history and include the entry ID."""
+        large_rows = [{"[x]": i} for i in range(INLINE_ROW_LIMIT + 1)]
+        respx.post(
+            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+        ).mock(return_value=Response(200, json=make_dax_response(large_rows)))
+
+        result = await call(
+            mcp_with_tools, "execute_dax",
+            workspace_id=WORKSPACE_ID,
+            dataset_id=DATASET_ID,
+            dax_query="EVALUATE Sales",
+            query_summary="Large dataset pull",
+        )
+        data = json.loads(result)
+        assert "historyEntryId" in data
+        assert "savedTo" in data
+
+
+# ---------------------------------------------------------------------------
+# search_query_history
+# ---------------------------------------------------------------------------
+
+
+class TestSearchQueryHistory:
+    @respx.mock
+    async def test_returns_logged_queries(self, mcp_with_tools: FastMCP):
+        """After execute_dax, search_query_history should find the entry."""
+        respx.post(
+            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+        ).mock(return_value=Response(200, json=make_dax_response([{"[x]": 42}])))
+
+        await call(
+            mcp_with_tools, "execute_dax",
+            workspace_id=WORKSPACE_ID,
+            dataset_id=DATASET_ID,
+            dax_query="EVALUATE Sales",
+            query_summary="Sales totals for testing",
+        )
+
+        result = await call(
+            mcp_with_tools, "search_query_history",
+            keyword="Sales totals",
+        )
+        data = json.loads(result)
+        assert data["matchCount"] >= 1
+        assert any("Sales totals" in e.get("query_summary", "") for e in data["entries"])
+
+    async def test_empty_history_returns_message(self, mcp_with_tools: FastMCP):
+        result = await call(mcp_with_tools, "search_query_history")
+        assert "No matching queries" in result
+
+
+# ---------------------------------------------------------------------------
+# delete_query_log_entry
+# ---------------------------------------------------------------------------
+
+
+class TestDeleteQueryLogEntryTool:
+    @respx.mock
+    async def test_deletes_entry_and_confirms(self, mcp_with_tools: FastMCP):
+        """Execute a query, then delete the log entry by ID."""
+        respx.post(
+            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+        ).mock(return_value=Response(200, json=make_dax_response([{"[x]": 1}])))
+
+        exec_result = await call(
+            mcp_with_tools, "execute_dax",
+            workspace_id=WORKSPACE_ID,
+            dataset_id=DATASET_ID,
+            dax_query="EVALUATE Sales",
+        )
+        entry_id = json.loads(exec_result)["historyEntryId"]
+
+        delete_result = await call(
+            mcp_with_tools, "delete_query_log_entry",
+            entry_id=entry_id,
+        )
+        assert "has been removed" in delete_result
+
+        # Verify it's gone from search
+        search_result = await call(mcp_with_tools, "search_query_history")
+        assert "No matching queries" in search_result
+
+    async def test_missing_id_returns_not_found(self, mcp_with_tools: FastMCP):
+        result = await call(
+            mcp_with_tools, "delete_query_log_entry",
+            entry_id="nonexistent-uuid",
+        )
+        assert "No history entry found" in result

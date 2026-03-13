@@ -14,6 +14,12 @@ from mcp.server.fastmcp import FastMCP
 
 from .auth import PowerBIAuth
 from .client import PowerBIClient, PowerBIError
+from .history import (
+    append_query_log,
+    delete_query_log_entry as _delete_log_entry,
+    make_log_entry,
+    search_query_log,
+)
 from .output import read_csv_page, save_rows_to_csv
 
 INLINE_ROW_LIMIT = 50
@@ -397,6 +403,13 @@ def register_tools(
             "are replaced with underscores. Example filename: "
             "dax_result_sales_by_region_2024_20260305_143022.csv",
         ] = None,
+        query_summary: Annotated[
+            str | None,
+            "Optional short description of what the user asked for, written in your "
+            "own words (e.g. 'Revenue by market and product category for Q1 2025'). "
+            "Logged to the query history so future sessions can find and reuse this "
+            "query by intent rather than by DAX syntax.",
+        ] = None,
     ) -> str:
         """
         Execute a DAX query against a Power BI dataset and return the result rows.
@@ -409,6 +422,11 @@ def register_tools(
         compact summary is returned with the file path, column names, row count,
         and a preview of the first 5 rows. Use `read_query_result` to page
         through a saved CSV, or read the file directly.
+
+        Every successful execution is logged to a local history file for
+        auditability and cross-session reuse. Use `search_query_history` to
+        find prior queries. The `query_summary` parameter makes history search
+        much more effective — always provide it when you can.
 
         Limitations imposed by the Power BI API:
         - Maximum 1,000,000 values or 100,000 rows per query.
@@ -425,6 +443,7 @@ def register_tools(
         """
         from .client import _parse_dax_rows
 
+        original_dax = dax_query
         if max_rows is not None and max_rows > 0:
             dax_query = f"EVALUATE TOPN({max_rows}, {dax_query[len('EVALUATE'):].strip()})"
 
@@ -439,21 +458,61 @@ def register_tools(
         if not rows:
             return "Query executed successfully but returned no rows."
 
+        columns = list(rows[0].keys())
+
+        # --- Log to history ---
+        csv_path = None
+
         if len(rows) <= INLINE_ROW_LIMIT:
-            return _fmt_json({"rowCount": len(rows), "rows": rows})
+            log_entry = make_log_entry(
+                workspace_id=workspace_id,
+                dataset_id=dataset_id,
+                dax_query=original_dax,
+                row_count=len(rows),
+                columns=columns,
+                query_summary=query_summary,
+                result_name=result_name,
+                csv_path=None,
+                max_rows=max_rows,
+            )
+            try:
+                append_query_log(output_dir, log_entry)
+            except Exception:
+                pass  # logging should never break the tool
+            return _fmt_json({
+                "rowCount": len(rows),
+                "rows": rows,
+                "historyEntryId": log_entry["id"],
+            })
 
         try:
-            file_path = save_rows_to_csv(rows, output_dir, name=result_name)
+            csv_path = save_rows_to_csv(rows, output_dir, name=result_name)
         except Exception as exc:
             return _fmt_json({"rowCount": len(rows), "rows": rows, "saveError": str(exc)})
 
-        columns = list(rows[0].keys())
+        log_entry = make_log_entry(
+            workspace_id=workspace_id,
+            dataset_id=dataset_id,
+            dax_query=original_dax,
+            row_count=len(rows),
+            columns=columns,
+            query_summary=query_summary,
+            result_name=result_name,
+            csv_path=csv_path,
+            max_rows=max_rows,
+        )
+        try:
+            append_query_log(output_dir, log_entry)
+        except Exception:
+            pass
+
         preview = rows[:5]
         result = {
             "rowCount": len(rows),
             "columns": columns,
             "preview": preview,
-            "savedTo": file_path,
+            "savedTo": csv_path,
+            "historyEntryId": log_entry["id"],
             "message": (
                 f"Large result ({len(rows)} rows) saved to CSV. "
                 "Use `read_query_result` to page through the data, "
@@ -504,3 +563,76 @@ def register_tools(
             return f"Error reading result file: {exc}"
 
         return _fmt_json(page)
+
+    @mcp.tool()
+    async def search_query_history(
+        keyword: Annotated[
+            str | None,
+            "Search term matched against query summaries, DAX text, and result names. "
+            "Case-insensitive substring match. Leave blank to return recent queries.",
+        ] = None,
+        dataset_id: Annotated[
+            str | None,
+            "Optional dataset GUID to narrow results to a single dataset.",
+        ] = None,
+        since_days: Annotated[
+            int,
+            "Only return entries from the last N days. Use 0 for all time. Default: 90.",
+        ] = 90,
+        limit: Annotated[
+            int,
+            "Maximum number of entries to return. Default: 20.",
+        ] = 20,
+    ) -> str:
+        """
+        Search the local query history log for prior DAX executions.
+
+        Every successful `execute_dax` call is logged with the DAX query,
+        a short summary of what the user asked for, the result shape, and
+        the path to any saved CSV file. Use this tool to:
+
+        - Find previous queries for a dataset so you can reuse or adapt the DAX
+        - Locate saved CSV files from earlier sessions
+        - Audit what data has been pulled and when
+        - Avoid re-running expensive queries when the data already exists locally
+
+        Results are returned newest-first. Use `keyword` to search by intent
+        (e.g. "revenue by market") — it matches against the query summary,
+        the DAX text, and the result name.
+        """
+        entries = search_query_log(
+            output_dir,
+            keyword=keyword,
+            dataset_id=dataset_id,
+            since_days=since_days,
+            limit=limit,
+        )
+
+        if not entries:
+            msg = "No matching queries found in the history log."
+            if keyword:
+                msg += f" (searched for: {keyword!r})"
+            return msg
+
+        return _fmt_json({"matchCount": len(entries), "entries": entries})
+
+    @mcp.tool()
+    async def delete_query_log_entry(
+        entry_id: Annotated[
+            str,
+            "The UUID of the history entry to remove. Found in the "
+            "`historyEntryId` field of an `execute_dax` response, or in "
+            "the `id` field of a `search_query_history` result.",
+        ],
+    ) -> str:
+        """
+        Remove a single entry from the query history log.
+
+        Use this when a query produced incorrect or misleading results and
+        should not appear in future history searches. The associated CSV file
+        (if any) is NOT deleted — only the log entry is removed.
+        """
+        removed = _delete_log_entry(output_dir, entry_id)
+        if removed:
+            return f"History entry {entry_id} has been removed."
+        return f"No history entry found with id {entry_id!r}. It may have already been deleted."
