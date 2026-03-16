@@ -16,11 +16,13 @@ from powerbi_mcp.client import (
     _parse_dax_rows,
     _strip_brackets,
 )
-from powerbi_mcp.models import Column, Dataset, Measure, RefreshEntry, Table, Workspace
+from powerbi_mcp.models import App, Column, Dataset, Measure, RefreshEntry, Table, Workspace
 from tests.conftest import (
+    APP_ID,
     DATASET_ID,
     FAKE_TOKEN,
     WORKSPACE_ID,
+    make_app_payload,
     make_column_dax_row,
     make_dataset_payload,
     make_dax_response,
@@ -94,6 +96,43 @@ class TestParseDaxRows:
 # ---------------------------------------------------------------------------
 # PowerBIClient tests
 # ---------------------------------------------------------------------------
+
+
+class TestListApps:
+    @respx.mock
+    async def test_returns_typed_models(self, client: PowerBIClient):
+        respx.get(f"{BASE}/apps").mock(
+            return_value=Response(200, json={"value": [make_app_payload()]})
+        )
+        result = await client.list_apps()
+        assert len(result) == 1
+        assert isinstance(result[0], App)
+        assert result[0].id == APP_ID
+        assert result[0].workspace_id == WORKSPACE_ID
+
+    @respx.mock
+    async def test_correct_url(self, client: PowerBIClient):
+        route = respx.get(f"{BASE}/apps").mock(
+            return_value=Response(200, json={"value": []})
+        )
+        await client.list_apps()
+        assert route.called
+
+    @respx.mock
+    async def test_empty_value_returns_empty_list(self, client: PowerBIClient):
+        respx.get(f"{BASE}/apps").mock(
+            return_value=Response(200, json={"value": []})
+        )
+        assert await client.list_apps() == []
+
+    @respx.mock
+    async def test_api_error_raises_powerbi_error(self, client: PowerBIClient):
+        respx.get(f"{BASE}/apps").mock(
+            return_value=Response(401, json={"error": {"message": "Unauthorized"}})
+        )
+        with pytest.raises(PowerBIError) as exc_info:
+            await client.list_apps()
+        assert exc_info.value.status_code == 401
 
 
 class TestListWorkspaces:

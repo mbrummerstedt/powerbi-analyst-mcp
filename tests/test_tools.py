@@ -21,9 +21,11 @@ from mcp.server.fastmcp import FastMCP
 
 from powerbi_mcp.tools import INLINE_ROW_LIMIT, register_tools
 from tests.conftest import (
+    APP_ID,
     DATASET_ID,
     FAKE_TOKEN,
     WORKSPACE_ID,
+    make_app_payload,
     make_column_dax_row,
     make_dataset_payload,
     make_dax_response,
@@ -155,6 +157,42 @@ class TestLogout:
             ):
                 result = await call(mcp, "authenticate")
         assert "ABC123" in result  # Phase 1 response, not Phase 2
+
+
+# ---------------------------------------------------------------------------
+# list_apps
+# ---------------------------------------------------------------------------
+
+
+class TestListApps:
+    @respx.mock
+    async def test_happy_path_returns_json(self, mcp_with_tools: FastMCP):
+        respx.get(f"{BASE}/apps").mock(
+            return_value=Response(200, json={"value": [make_app_payload()]})
+        )
+        result = await call(mcp_with_tools, "list_apps")
+        data = json.loads(result)
+        assert len(data) == 1
+        assert data[0]["id"] == APP_ID
+        assert data[0]["name"] == "Test App"
+        assert data[0]["workspaceId"] == WORKSPACE_ID
+
+    @respx.mock
+    async def test_empty_list_suggests_list_workspaces(self, mcp_with_tools: FastMCP):
+        respx.get(f"{BASE}/apps").mock(
+            return_value=Response(200, json={"value": []})
+        )
+        result = await call(mcp_with_tools, "list_apps")
+        assert "No installed apps" in result
+        assert "list_workspaces" in result
+
+    @respx.mock
+    async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
+        respx.get(f"{BASE}/apps").mock(
+            return_value=Response(403, json={"error": {"message": "Forbidden"}})
+        )
+        result = await call(mcp_with_tools, "list_apps")
+        assert "Error listing apps" in result
 
 
 # ---------------------------------------------------------------------------

@@ -8,6 +8,7 @@ from unittest.mock import patch
 
 import pytest
 
+APP_ID = "eeeeeeee-0000-0000-0000-000000000005"
 WORKSPACE_ID = "aaaaaaaa-0000-0000-0000-000000000001"
 DATASET_ID = "bbbbbbbb-0000-0000-0000-000000000002"
 FAKE_TOKEN = "fake-bearer-token"
@@ -16,6 +17,25 @@ FAKE_TOKEN = "fake-bearer-token"
 # ---------------------------------------------------------------------------
 # Raw API payload factories — mirror the actual Power BI REST API shapes
 # ---------------------------------------------------------------------------
+
+
+def make_app_payload(
+    *,
+    id: str = APP_ID,
+    name: str = "Test App",
+    description: str = "A test app",
+    published_by: str = "Data Insight",
+    last_update: str = "2026-03-16T14:06:32.021Z",
+    workspace_id: str = WORKSPACE_ID,
+) -> dict:
+    return {
+        "id": id,
+        "name": name,
+        "description": description,
+        "publishedBy": published_by,
+        "lastUpdate": last_update,
+        "workspaceId": workspace_id,
+    }
 
 
 def make_workspace_payload(
@@ -132,6 +152,11 @@ def make_column_dax_row(
 # ---------------------------------------------------------------------------
 # Fixtures
 # ---------------------------------------------------------------------------
+
+
+@pytest.fixture
+def app_payload() -> dict:
+    return make_app_payload()
 
 
 @pytest.fixture

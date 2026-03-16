@@ -34,9 +34,9 @@ mcp = FastMCP(
 
         Typical workflow:
         1. Call `authenticate` if this is the first run or the token has expired.
-        2. Call `list_workspaces` to find the workspace_id that contains the
-           dataset you want to analyse.
-        3. Call `list_datasets` with that workspace_id.
+        2. Call `list_apps` to find installed apps and their workspace IDs.
+           If no apps are installed, fall back to `list_workspaces`.
+        3. Call `list_datasets` with the workspace_id from the app.
         4. Call `list_tables`, `list_measures`, or `list_columns` to explore
            the data model structure.
         5. Call `execute_dax` to retrieve data using a DAX query.

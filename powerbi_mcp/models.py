@@ -11,6 +11,19 @@ from typing import Optional
 from pydantic import BaseModel, ConfigDict, Field
 
 
+class App(BaseModel):
+    """A Power BI installed app."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    name: str
+    description: Optional[str] = None
+    published_by: Optional[str] = Field(None, alias="publishedBy")
+    last_update: Optional[datetime] = Field(None, alias="lastUpdate")
+    workspace_id: Optional[str] = Field(None, alias="workspaceId")
+
+
 class Workspace(BaseModel):
     """A Power BI workspace (group)."""
 

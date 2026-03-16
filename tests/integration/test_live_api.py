@@ -40,6 +40,38 @@ def live_client() -> PowerBIClient:
 
 
 # ---------------------------------------------------------------------------
+# Apps
+# ---------------------------------------------------------------------------
+
+
+class TestLiveListApps:
+    async def test_returns_list(self, live_client: PowerBIClient):
+        apps = await live_client.list_apps()
+        assert isinstance(apps, list)
+
+    async def test_each_app_has_id_name_and_workspace_id(self, live_client: PowerBIClient):
+        apps = await live_client.list_apps()
+        if not apps:
+            pytest.skip("No installed apps for this account")
+        for app in apps:
+            assert app.id, "app id must be non-empty"
+            assert app.name, "app name must be non-empty"
+            uuid.UUID(app.id)
+            if app.workspace_id:
+                uuid.UUID(app.workspace_id)
+
+    async def test_workspace_id_can_list_datasets(self, live_client: PowerBIClient):
+        """The workspaceId from an app should be usable to list datasets."""
+        apps = await live_client.list_apps()
+        for app in apps:
+            if app.workspace_id:
+                datasets = await live_client.list_datasets(app.workspace_id)
+                assert isinstance(datasets, list)
+                return
+        pytest.skip("No apps with workspaceId found")
+
+
+# ---------------------------------------------------------------------------
 # Workspaces
 # ---------------------------------------------------------------------------
 

@@ -9,8 +9,9 @@ from datetime import datetime, timezone
 import pytest
 from pydantic import ValidationError
 
-from powerbi_mcp.models import Column, Dataset, Measure, RefreshEntry, Table, Workspace
+from powerbi_mcp.models import App, Column, Dataset, Measure, RefreshEntry, Table, Workspace
 from tests.conftest import (
+    make_app_payload,
     make_column_dax_row,
     make_dataset_payload,
     make_measure_dax_row,
@@ -18,6 +19,47 @@ from tests.conftest import (
     make_table_dax_row,
     make_workspace_payload,
 )
+
+
+class TestApp:
+    def test_parses_full_payload(self):
+        app = App.model_validate(make_app_payload())
+        assert app.id == "eeeeeeee-0000-0000-0000-000000000005"
+        assert app.name == "Test App"
+        assert app.description == "A test app"
+        assert app.published_by == "Data Insight"
+        assert app.workspace_id == "aaaaaaaa-0000-0000-0000-000000000001"
+
+    def test_parses_last_update_as_datetime(self):
+        app = App.model_validate(make_app_payload())
+        assert isinstance(app.last_update, datetime)
+        assert app.last_update.year == 2026
+
+    def test_parses_camel_case_aliases(self):
+        app = App.model_validate({
+            "id": "x",
+            "name": "y",
+            "publishedBy": "Someone",
+            "workspaceId": "ws-123",
+            "lastUpdate": "2025-01-01T00:00:00Z",
+        })
+        assert app.published_by == "Someone"
+        assert app.workspace_id == "ws-123"
+
+    def test_optional_fields_default_to_none(self):
+        app = App.model_validate({"id": "x", "name": "y"})
+        assert app.description is None
+        assert app.published_by is None
+        assert app.last_update is None
+        assert app.workspace_id is None
+
+    def test_missing_required_id_raises(self):
+        with pytest.raises(ValidationError):
+            App.model_validate({"name": "y"})
+
+    def test_missing_required_name_raises(self):
+        with pytest.raises(ValidationError):
+            App.model_validate({"id": "x"})
 
 
 class TestWorkspace:
