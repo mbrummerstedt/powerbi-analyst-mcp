@@ -15,7 +15,7 @@ from typing import Any
 
 import httpx
 
-from .models import Column, Dataset, Measure, RefreshEntry, Table, Workspace
+from .models import App, Column, Dataset, Measure, RefreshEntry, Table, Workspace
 
 BASE_URL = "https://api.powerbi.com/v1.0/myorg"
 DEFAULT_TIMEOUT = 120
@@ -53,6 +53,14 @@ class PowerBIClient:
             "Authorization": f"Bearer {token}",
             "Content-Type": "application/json",
         }
+
+    async def list_apps(self) -> list[App]:
+        """Return all installed Power BI apps for the authenticated user."""
+        async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
+            resp = await client.get(f"{BASE_URL}/apps", headers=self._headers)
+            _raise_for_status(resp)
+            data = resp.json().get("value", [])
+            return [App.model_validate(app) for app in data]
 
     async def list_workspaces(self) -> list[Workspace]:
         """Return all workspaces the authenticated user is a member of."""

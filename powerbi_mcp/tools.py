@@ -182,6 +182,47 @@ def register_tools(
         return _fmt_json(summary)
 
     @mcp.tool()
+    async def list_apps() -> str:
+        """
+        List all Power BI apps installed for the authenticated user.
+
+        Returns each app's id, name, description, publisher, last update time,
+        and — most importantly — the `workspaceId` of the underlying workspace.
+
+        Use the `workspaceId` field (not the app `id`) as the `workspace_id`
+        parameter in `list_datasets`, `list_tables`, `execute_dax`, and other
+        dataset tools.
+
+        If no apps are installed, try `list_workspaces` instead to find
+        workspaces directly.
+        """
+        client = _get_client()
+        try:
+            apps = await client.list_apps()
+        except PowerBIError as exc:
+            return f"Error listing apps: {exc}"
+
+        if not apps:
+            return (
+                "No installed apps found. "
+                "Use `list_workspaces` instead to find workspaces directly."
+            )
+
+        summary = [
+            {
+                "id": app.id,
+                "name": app.name,
+                "description": app.description,
+                "publishedBy": app.published_by,
+                "lastUpdate": app.last_update,
+                "workspaceId": app.workspace_id,
+            }
+            for app in apps
+        ]
+
+        return _fmt_json(summary)
+
+    @mcp.tool()
     async def list_datasets(
         workspace_id: Annotated[
             str,
