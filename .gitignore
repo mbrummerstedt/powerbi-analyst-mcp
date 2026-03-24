@@ -1,5 +1,7 @@
 # Environment / secrets
 .env
+.mcpregistry_github_token
+.mcpregistry_registry_token
 
 # Python
 __pycache__/
@@ -8,7 +10,6 @@ __pycache__/
 .venv/
 venv/
 *.egg-info/
-dist/
 build/
 .pytest_cache/
 
@@ -17,3 +18,9 @@ build/
 
 # Token cache (written by auth.py at runtime)
 .powerbi_mcp_token_cache.*
+
+# Bundle — org-specific manifest contains secrets; only template is tracked
+bundle/manifest.json
+
+# Built bundles contain baked-in secrets — never commit
+dist/

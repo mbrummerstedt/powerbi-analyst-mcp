@@ -197,6 +197,15 @@ Then replace the `uvx` command block with:
 "args": []
 ```
 
+#### Claude Desktop bundle (.mcpb) — for organisation-wide distribution
+
+A `.mcpb` (MCP Bundle) is a ZIP archive that Claude Desktop can install via drag-and-drop. Two manifests are provided in [`bundle/`](bundle/):
+
+- **`manifest.template.json`** (committed) — generic version that prompts the user for their Azure CLIENT_ID and TENANT_ID at install time via Claude's UI
+- **`manifest.json`** (git-ignored) — org-specific version with credentials hardcoded; copy from the template, fill in your values, and build
+
+See [`bundle/README.md`](bundle/README.md) for full build and distribution instructions.
+
 ---
 
 ### Typical analysis workflow
