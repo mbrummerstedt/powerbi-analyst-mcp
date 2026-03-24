@@ -1,0 +1,66 @@
+{
+  "manifest_version": "0.3",
+  "name": "powerbi-analyst-mcp",
+  "display_name": "Power BI Analyst",
+  "version": "0.1.2",
+  "description": "Query and analyse Power BI semantic models with Claude. Explore tables and measures, run DAX queries, and work with real results — even across datasets with tens of thousands of rows.",
+  "author": {
+    "name": "Martin Brummerstedt",
+    "url": "https://github.com/mbrummerstedt/powerbi-analyst-mcp"
+  },
+  "repository": {
+    "type": "git",
+    "url": "https://github.com/mbrummerstedt/powerbi-analyst-mcp"
+  },
+  "keywords": ["power-bi", "powerbi", "dax", "analytics", "microsoft"],
+  "license": "MIT",
+  "user_config": {
+    "client_id": {
+      "type": "string",
+      "title": "Azure Application (Client) ID",
+      "description": "The Application (client) ID from your Azure AD app registration. Find this in Azure portal → App registrations → Overview.",
+      "required": true,
+      "sensitive": false
+    },
+    "tenant_id": {
+      "type": "string",
+      "title": "Azure Directory (Tenant) ID",
+      "description": "Your Azure AD Directory (tenant) ID. Find this in Azure portal → Azure Active Directory → Overview.",
+      "required": true,
+      "sensitive": false
+    }
+  },
+  "server": {
+    "type": "python",
+    "entry_point": "server/main.py",
+    "mcp_config": {
+      "command": "uvx",
+      "args": ["powerbi-analyst-mcp"],
+      "env": {
+        "POWERBI_CLIENT_ID": "${user_config.client_id}",
+        "POWERBI_TENANT_ID": "${user_config.tenant_id}"
+      }
+    }
+  },
+  "tools": [
+    { "name": "authenticate",         "description": "Sign in via OAuth device code flow" },
+    { "name": "logout",               "description": "Clear the cached token" },
+    { "name": "list_workspaces",      "description": "List all Power BI workspaces you have access to" },
+    { "name": "list_datasets",        "description": "List datasets / semantic models in a workspace" },
+    { "name": "get_dataset_info",     "description": "Metadata and refresh history for a dataset" },
+    { "name": "list_tables",          "description": "All visible tables in a dataset" },
+    { "name": "list_measures",        "description": "Measures with name, table, description, and format string" },
+    { "name": "list_columns",         "description": "Columns with data type and key flag" },
+    { "name": "execute_dax",          "description": "Run a DAX query — inline for small results, local CSV for large ones" },
+    { "name": "read_query_result",    "description": "Page through a large CSV result" },
+    { "name": "search_query_history", "description": "Search the local query log by keyword, dataset, or time range" },
+    { "name": "delete_query_log_entry", "description": "Remove a query log entry" }
+  ],
+  "compatibility": {
+    "claude_desktop": ">=1.0.0",
+    "platforms": ["darwin", "win32"],
+    "runtimes": {
+      "python": ">=3.11"
+    }
+  }
+}
