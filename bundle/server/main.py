@@ -3,11 +3,13 @@
 Entry point for the Power BI Analyst MCP bundle.
 
 Launch strategy (in order):
-  1. uvx on PATH                — already installed system-wide
-  2. pip install uv, then uvx  — bootstraps uv, calls it via full path
+  1. uvx / uv tool run on PATH         — already installed system-wide
+  2. pip install uv, then retry        — bootstraps uv, calls via full path
+     uvx.exe and uv.exe both checked   — pip install uv may only create uv.exe
 """
 import pathlib
 import platform
+import shutil
 import subprocess
 import sys
 import os
@@ -15,35 +17,54 @@ import os
 PACKAGE = "powerbi-analyst-mcp"
 
 
-def _uvx_candidates():
-    """Return candidate uvx paths: PATH first, then next to sys.executable."""
-    import shutil
-    found = shutil.which("uvx")
-    if found:
-        yield found
-
+def _candidates():
+    """
+    Yield (binary_path, args) pairs to try, in preference order.
+    Checks both PATH and common install locations relative to sys.executable.
+    uvx and uv tool run are functionally identical.
+    """
     python_dir = pathlib.Path(sys.executable).parent
-    if platform.system() == "Windows":
-        yield python_dir / "Scripts" / "uvx.exe"
-        yield python_dir / "uvx.exe"
+    is_windows = platform.system() == "Windows"
+
+    if is_windows:
+        locations = [
+            ("uvx", [python_dir / "Scripts" / "uvx.exe", python_dir / "uvx.exe"]),
+            ("uv",  [python_dir / "Scripts" / "uv.exe",  python_dir / "uv.exe"]),
+        ]
     else:
-        yield python_dir / "uvx"
-        yield python_dir.parent / "bin" / "uvx"
+        bin_dir = python_dir.parent / "bin"
+        locations = [
+            ("uvx", [python_dir / "uvx", bin_dir / "uvx"]),
+            ("uv",  [python_dir / "uv",  bin_dir / "uv"]),
+        ]
+
+    # PATH first
+    for name, _ in locations:
+        found = shutil.which(name)
+        if found:
+            args = [PACKAGE] if name == "uvx" else ["tool", "run", PACKAGE]
+            yield found, args
+
+    # Known install locations relative to sys.executable
+    for name, paths in locations:
+        args = [PACKAGE] if name == "uvx" else ["tool", "run", PACKAGE]
+        for p in paths:
+            if p.exists():
+                yield str(p), args
 
 
-def _run_uvx():
-    for candidate in _uvx_candidates():
-        if pathlib.Path(candidate).exists():
-            result = subprocess.run([str(candidate), PACKAGE], env=os.environ)
-            sys.exit(result.returncode)
-    return False
+def _run():
+    for binary, args in _candidates():
+        result = subprocess.run([binary] + args, env=os.environ)
+        sys.exit(result.returncode)
 
 
 def main():
-    # Strategy 1: uvx already available
-    _run_uvx()
+    # Strategy 1: uv/uvx already available
+    _run()
 
-    # Strategy 2: install uv via pip, then call uvx by full path
+    # Strategy 2: install uv via pip, then call via full path
+    # Note: pip install uv may create only uv.exe (not uvx.exe) on Windows
     print("Installing uv (one-time setup)...", file=sys.stderr)
     try:
         subprocess.run(
@@ -54,11 +75,10 @@ def main():
         print(f"Failed to install uv: {e}", file=sys.stderr)
         sys.exit(1)
 
-    # Call uvx by full path — don't rely on PATH being updated
-    _run_uvx()
+    _run()
 
     print(
-        "Could not find uvx after installing uv. "
+        "Could not find uv/uvx after installing. "
         "Please report this to your administrator.",
         file=sys.stderr,
     )
