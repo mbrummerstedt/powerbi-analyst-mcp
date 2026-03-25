@@ -28,6 +28,13 @@
       "description": "Your Azure AD Directory (tenant) ID. Find this in Azure portal → Azure Active Directory → Overview.",
       "required": true,
       "sensitive": false
+    },
+    "output_dir": {
+      "type": "string",
+      "title": "Output Directory (optional)",
+      "description": "Directory where large DAX query results are saved as CSV files. Leave blank to use the default: ~/powerbi_output.",
+      "required": false,
+      "sensitive": false
     }
   },
   "server": {
@@ -38,7 +45,8 @@
       "args": ["${__dirname}/server/main.py"],
       "env": {
         "POWERBI_CLIENT_ID": "${user_config.client_id}",
-        "POWERBI_TENANT_ID": "${user_config.tenant_id}"
+        "POWERBI_TENANT_ID": "${user_config.tenant_id}",
+        "POWERBI_OUTPUT_DIR": "${user_config.output_dir}"
       }
     }
   },

@@ -199,12 +199,44 @@ Then replace the `uvx` command block with:
 
 #### Claude Desktop bundle (.mcpb) — for organisation-wide distribution
 
-A `.mcpb` (MCP Bundle) is a ZIP archive that Claude Desktop can install via drag-and-drop. Two manifests are provided in [`bundle/`](bundle/):
+A `.mcpb` (MCP Bundle) is a ZIP archive that Claude Desktop installs via drag-and-drop — no manual config editing required. The bundle auto-installs all Python dependencies on first run; the only prerequisite is Python 3.10+.
 
-- **`manifest.template.json`** (committed) — generic version that prompts the user for their Azure CLIENT_ID and TENANT_ID at install time via Claude's UI
-- **`manifest.json`** (git-ignored) — org-specific version with credentials hardcoded; copy from the template, fill in your values, and build
+Two manifests live in [`bundle/`](bundle/):
 
-See [`bundle/README.md`](bundle/README.md) for full build and distribution instructions.
+| File | Purpose | Git |
+|---|---|---|
+| `manifest.template.json` | Generic — prompts the user for credentials at install time via Claude's UI | Committed |
+| `manifest.json` | Org-specific — credentials hardcoded for silent deployment | **Gitignored** — never commit |
+
+**Building an org bundle:**
+
+```bash
+# 1. Create your org manifest (one-time setup)
+cp bundle/manifest.template.json bundle/manifest.json
+```
+
+Edit `bundle/manifest.json` and set your values in `mcp_config.env`:
+
+```json
+"env": {
+  "POWERBI_CLIENT_ID": "your-application-client-id",
+  "POWERBI_TENANT_ID": "your-directory-tenant-id",
+  "POWERBI_OUTPUT_DIR": "/custom/output/path"
+}
+```
+
+`POWERBI_OUTPUT_DIR` is optional — omit it entirely to use the default `~/powerbi_output`.
+
+```bash
+# 2. Build the bundle
+chmod +x bundle/build.sh
+./bundle/build.sh
+# → dist/miinto-powerbi-analyst.mcpb  (gitignored)
+```
+
+**Distributing:** Share `dist/*.mcpb` with colleagues. They drag-and-drop it onto **Claude Desktop → Settings → Developer**. Works on macOS and Windows.
+
+> **Security:** `bundle/manifest.json` and `dist/` are both gitignored. Only the credential-free template is committed. Never add credentials to any file tracked by git.
 
 ---
 
