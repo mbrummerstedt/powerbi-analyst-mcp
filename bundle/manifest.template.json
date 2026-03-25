@@ -34,8 +34,8 @@
     "type": "python",
     "entry_point": "server/main.py",
     "mcp_config": {
-      "command": "uvx",
-      "args": ["powerbi-analyst-mcp"],
+      "command": "python",
+      "args": ["${__dirname}/server/main.py"],
       "env": {
         "POWERBI_CLIENT_ID": "${user_config.client_id}",
         "POWERBI_TENANT_ID": "${user_config.tenant_id}"
