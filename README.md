@@ -7,9 +7,7 @@
 [![Tests](https://img.shields.io/github/actions/workflow/status/mbrummerstedt/powerbi-analyst-mcp/tests.yml?label=tests)](https://github.com/mbrummerstedt/powerbi-analyst-mcp/actions)
 [![License: MIT](https://img.shields.io/github/license/mbrummerstedt/powerbi-analyst-mcp)](LICENSE)
 
-<a href="https://glama.ai/mcp/servers/mbrummerstedt/powerbi-analyst-mcp">
-  <img width="380" height="200" src="https://glama.ai/mcp/servers/mbrummerstedt/powerbi-analyst-mcp/badge" alt="powerbi-analyst-mcp MCP server" />
-</a>
+[![powerbi-analyst-mcp MCP server](https://glama.ai/mcp/servers/mbrummerstedt/powerbi-analyst-mcp/badges/card.svg)](https://glama.ai/mcp/servers/mbrummerstedt/powerbi-analyst-mcp)
 
 **Ask Claude to analyse your Power BI data. Get answers — not context-window crashes.**
 
