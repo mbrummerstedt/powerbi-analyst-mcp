@@ -52,3 +52,7 @@ register_tools(mcp, settings.client_id, settings.tenant_id, settings.output_dir)
 
 def main() -> None:
     mcp.run()
+
+
+if __name__ == "__main__":
+    main()
