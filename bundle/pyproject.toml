@@ -4,17 +4,9 @@ build-backend = "hatchling.build"
 
 [project]
 name = "powerbi-analyst-mcp"
-version = "0.1.2"
+version = "0.2.0"
 description = "Read-only MCP server for Power BI semantic models — query workspaces, datasets, and execute DAX via any MCP client"
-readme = "README.md"
-license = { file = "LICENSE" }
 requires-python = ">=3.10"
-keywords = ["mcp", "power-bi", "powerbi", "dax", "llm", "claude"]
-classifiers = [
-    "Programming Language :: Python :: 3",
-    "License :: OSI Approved :: MIT License",
-    "Operating System :: OS Independent",
-]
 dependencies = [
     "mcp[cli]>=1.0.0",
     "msal>=1.28.0",
@@ -23,17 +15,6 @@ dependencies = [
     "python-dotenv>=1.0.0",
     "pydantic-settings>=2.0.0",
 ]
-
-[project.optional-dependencies]
-dev = [
-    "pytest>=8.0",
-    "pytest-asyncio>=0.23",
-    "respx>=0.21",
-]
-
-[project.urls]
-Repository = "https://github.com/mbrummerstedt/powerbi-analyst-mcp"
-Issues = "https://github.com/mbrummerstedt/powerbi-analyst-mcp/issues"
 
 [project.scripts]
 powerbi-analyst-mcp = "powerbi_mcp.app:main"

@@ -1,0 +1,9 @@
+__pycache__/
+*.pyc
+.venv/
+.env
+build.sh
+manifest.template.json
+.mcpbignore
+.gitignore
+README.md
