@@ -105,7 +105,7 @@ The agent explores the schema, writes the DAX, handles the file, and delivers th
 
 ### Prerequisites
 
-- Python 3.11+
+- Python 3.10+
 - A Power BI Pro, Premium Per User (PPU), or Premium capacity licence
 - An Azure AD app registration (free, ~5 minutes — see below)
 
