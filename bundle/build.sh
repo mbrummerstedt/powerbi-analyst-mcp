@@ -1,58 +1,53 @@
 #!/usr/bin/env bash
-# ---------------------------------------------------------------------------
-# build.sh — Creates a .mcpb bundle from the contents of this directory.
-#
-# Usage:
-#   cd bundle/
-#   ./build.sh
-#
-# Output: ../dist/<name>.mcpb
+# Build dist/miinto-powerbi-analyst.mcpb from bundle/ config + live source.
+# Always creates a fresh zip — no incremental updates, no stale pycache.
 #
 # Prerequisites:
-#   - manifest.json must exist (copy manifest.template.json and fill in values)
-#   - python3 (to read the name from manifest.json)
-#   - zip
-# ---------------------------------------------------------------------------
+#   - bundle/manifest.json must exist and contain no placeholder values
+#   - python3
 set -euo pipefail
 
-SCRIPT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
-cd "$SCRIPT_DIR"
+BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
+REPO_ROOT="$(dirname "$BUNDLE_DIR")"
 
-# --- Validate manifest.json ---
-if [[ ! -f manifest.json ]]; then
-  echo "Error: manifest.json not found."
-  echo ""
-  echo "  cp manifest.template.json manifest.json"
-  echo "  # then edit manifest.json — set your client_id, tenant_id, etc."
-  echo ""
+if [[ ! -f "$BUNDLE_DIR/manifest.json" ]]; then
+  echo "Error: bundle/manifest.json not found."
+  echo "  cp bundle/manifest.template.json bundle/manifest.json"
+  echo "  # then fill in your org credentials"
   exit 1
 fi
 
-if grep -q "FILL_IN_\|YOUR_AZURE" manifest.json; then
+if grep -q "FILL_IN_\|YOUR_AZURE" "$BUNDLE_DIR/manifest.json"; then
   echo "Error: manifest.json still contains placeholder values."
   exit 1
 fi
 
-# --- Read bundle name ---
-BUNDLE_NAME=$(python3 -c "import json; print(json.load(open('manifest.json'))['name'])")
-OUTPUT_DIR="$SCRIPT_DIR/../dist"
-OUTPUT="$OUTPUT_DIR/${BUNDLE_NAME}.mcpb"
+python3 - <<EOF
+import zipfile, pathlib, json, sys
 
-mkdir -p "$OUTPUT_DIR"
+bundle = pathlib.Path("$BUNDLE_DIR")
+repo   = pathlib.Path("$REPO_ROOT")
 
-# --- Build .mcpb (ZIP archive) ---
-TMP_ZIP=$(mktemp /tmp/mcpb_XXXXXX).zip
+manifest = json.loads((bundle / "manifest.json").read_text())
+name     = manifest["name"]
+out      = repo / "dist" / f"{name}.mcpb"
+out.parent.mkdir(parents=True, exist_ok=True)
 
-zip -j "$TMP_ZIP" manifest.json pyproject.toml   # root-level files
-zip -r "$TMP_ZIP" powerbi_mcp/                    # package directory
-[[ -f icon.png ]]  && zip -j "$TMP_ZIP" icon.png
+config_files = ["manifest.json", "pyproject.toml", ".python-version"]
+missing = [f for f in config_files if not (bundle / f).exists()]
+if missing:
+    sys.exit(f"Missing bundle/ files: {missing}")
 
-mv "$TMP_ZIP" "$OUTPUT"
+with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
+    for f in config_files:
+        z.write(bundle / f, f)
+    for p in sorted((repo / "powerbi_mcp").rglob("*")):
+        if "__pycache__" in p.parts or p.suffix == ".pyc":
+            continue
+        z.write(p, p.relative_to(repo))
 
-echo ""
-echo "Bundle created: $OUTPUT"
-echo ""
-echo "To install:"
-echo "  1. Open Claude Desktop → Settings → Developer"
-echo "  2. Drag and drop $OUTPUT onto the window"
-echo ""
+names = zipfile.ZipFile(out).namelist()
+print(f"Built {out} ({len(names)} files)")
+for n in names:
+    print(f"  {n}")
+EOF
