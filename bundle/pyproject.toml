@@ -4,7 +4,7 @@ build-backend = "hatchling.build"
 
 [project]
 name = "powerbi-analyst-mcp"
-version = "0.3.0"
+version = "0.3.1"
 description = "Read-only MCP server for Power BI semantic models — query workspaces, datasets, and execute DAX via any MCP client"
 requires-python = ">=3.10"
 dependencies = [
