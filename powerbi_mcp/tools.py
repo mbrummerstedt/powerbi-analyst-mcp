@@ -158,6 +158,11 @@ def register_tools(
 
         Returns workspace id, name, type, and capacity information.
         Use the `id` field as `workspace_id` in subsequent tools.
+
+        NOTE: Prefer `list_apps` over this tool. Most organisations manage
+        dataset access through Power BI apps.  Using `list_apps` ensures you
+        only discover datasets the user actually has Build permission to query.
+        Use `list_workspaces` only as a fallback when no apps are installed.
         """
         client = _get_client()
         try:
@@ -227,7 +232,7 @@ def register_tools(
         workspace_id: Annotated[
             str,
             "The GUID of the Power BI workspace (group) to list datasets from. "
-            "Obtain this from `list_workspaces`.",
+            "Obtain this from `list_apps` (preferred) or `list_workspaces`.",
         ],
     ) -> str:
         """
@@ -502,6 +507,16 @@ def register_tools(
         try:
             raw = await client.execute_dax(workspace_id, dataset_id, dax_query)
         except PowerBIError as exc:
+            if exc.status_code == 403:
+                return (
+                    f"DAX query error: {exc}\n\n"
+                    "This usually means the user lacks Build permission on this "
+                    "dataset. If the organisation manages access through Power BI "
+                    "apps, make sure the dataset belongs to an app the user has "
+                    "installed (check with `list_apps`). Datasets discovered via "
+                    "`list_workspaces` may be visible but not queryable without "
+                    "explicit Build permission."
+                )
             return f"DAX query error: {exc}"
 
         rows = _parse_dax_rows(raw)
