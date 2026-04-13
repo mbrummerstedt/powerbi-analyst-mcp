@@ -45,8 +45,12 @@
       "description": "Clear the cached token"
     },
     {
+      "name": "list_apps",
+      "description": "List installed Power BI apps and their workspace IDs (preferred over list_workspaces)"
+    },
+    {
       "name": "list_workspaces",
-      "description": "List all Power BI workspaces you have access to"
+      "description": "List all Power BI workspaces you have access to (fallback — prefer list_apps)"
     },
     {
       "name": "list_datasets",
