@@ -31,6 +31,18 @@ bash bundle/build.sh
 
 Output: `dist/miinto-powerbi-analyst.mcpb`
 
+## Security — Bundle and Manifest Contain Secrets
+
+`bundle/manifest.json` and `dist/*.mcpb` contain baked-in org credentials
+(`POWERBI_CLIENT_ID`, `POWERBI_TENANT_ID`). Both are in `.gitignore` for this reason.
+
+**NEVER:**
+- `git add -f bundle/manifest.json` or `git add -f dist/`
+- Attach the `.mcpb` file to a GitHub release
+- Publish the bundle anywhere public
+
+The bundle is for **internal distribution only** — share it directly with users, not via public URLs or release assets.
+
 ## Running Tests
 
 ```bash
