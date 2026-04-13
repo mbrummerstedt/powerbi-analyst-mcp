@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "miinto-powerbi-analyst",
   "display_name": "Miinto Power BI Analyst",
-  "version": "0.4.0",
+  "version": "0.4.1",
   "description": "Query and analyse Miinto's Power BI semantic models with Claude. Explore tables and measures, run DAX queries, and work with real results — even across datasets with tens of thousands of rows.",
   "author": {
     "name": "Miinto"
