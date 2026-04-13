@@ -19,6 +19,9 @@ build/
 # Editor
 .vscode/
 
+# Claude Code local MCP config (hardcoded paths)
+.mcp.json
+
 # Token cache (written by auth.py at runtime)
 .powerbi_mcp_token_cache.*
 
