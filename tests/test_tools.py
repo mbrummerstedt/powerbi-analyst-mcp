@@ -24,8 +24,10 @@ from tests.conftest import (
     APP_ID,
     DATASET_ID,
     FAKE_TOKEN,
+    ORIGINAL_REPORT_ID,
     WORKSPACE_ID,
     make_app_payload,
+    make_app_report_payload,
     make_column_dax_row,
     make_dataset_payload,
     make_dax_response,
@@ -33,6 +35,7 @@ from tests.conftest import (
     make_refresh_entry_payload,
     make_table_dax_row,
     make_workspace_payload,
+    make_workspace_report_payload,
 )
 
 BASE = "https://api.powerbi.com/v1.0/myorg"
@@ -201,31 +204,51 @@ class TestListApps:
 
 
 class TestListDatasets:
+    def _mock_apps(self):
+        """Mock the list_apps call that the tool uses to resolve workspaceId."""
+        respx.get(f"{BASE}/apps").mock(
+            return_value=Response(200, json={"value": [make_app_payload()]})
+        )
+
+    def _mock_full_flow(self):
+        """Register respx mocks for list_apps + 3-step app→workspace→dataset resolution."""
+        self._mock_apps()
+        respx.get(f"{BASE}/apps/{APP_ID}/reports").mock(
+            return_value=Response(200, json={"value": [make_app_report_payload()]})
+        )
+        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/reports/{ORIGINAL_REPORT_ID}").mock(
+            return_value=Response(200, json=make_workspace_report_payload())
+        )
+        respx.get(f"{BASE}/datasets/{DATASET_ID}").mock(
+            return_value=Response(200, json=make_dataset_payload())
+        )
+
     @respx.mock
     async def test_happy_path_returns_json(self, mcp_with_tools: FastMCP):
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets").mock(
-            return_value=Response(200, json={"value": [make_dataset_payload()]})
-        )
-        result = await call(mcp_with_tools, "list_datasets", workspace_id=WORKSPACE_ID)
+        self._mock_full_flow()
+        result = await call(mcp_with_tools, "list_datasets", app_id=APP_ID)
         data = json.loads(result)
         assert len(data) == 1
         assert data[0]["id"] == DATASET_ID
         assert data[0]["name"] == "Test Dataset"
+        assert data[0]["workspaceId"] == WORKSPACE_ID
 
     @respx.mock
     async def test_empty_returns_human_message(self, mcp_with_tools: FastMCP):
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets").mock(
+        self._mock_apps()
+        respx.get(f"{BASE}/apps/{APP_ID}/reports").mock(
             return_value=Response(200, json={"value": []})
         )
-        result = await call(mcp_with_tools, "list_datasets", workspace_id=WORKSPACE_ID)
+        result = await call(mcp_with_tools, "list_datasets", app_id=APP_ID)
         assert "No datasets found" in result
 
     @respx.mock
     async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets").mock(
+        self._mock_apps()
+        respx.get(f"{BASE}/apps/{APP_ID}/reports").mock(
             return_value=Response(500, json={"error": {"message": "Server Error"}})
         )
-        result = await call(mcp_with_tools, "list_datasets", workspace_id=WORKSPACE_ID)
+        result = await call(mcp_with_tools, "list_datasets", app_id=APP_ID)
         assert "Error listing datasets" in result
 
 

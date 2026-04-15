@@ -11,6 +11,8 @@ import pytest
 APP_ID = "eeeeeeee-0000-0000-0000-000000000005"
 WORKSPACE_ID = "aaaaaaaa-0000-0000-0000-000000000001"
 DATASET_ID = "bbbbbbbb-0000-0000-0000-000000000002"
+APP_REPORT_ID = "rrrrrrrr-0000-0000-0000-000000000010"       # report ID in app context
+ORIGINAL_REPORT_ID = "rrrrrrrr-0000-0000-0000-000000000011"  # original workspace report ID
 FAKE_TOKEN = "fake-bearer-token"
 
 
@@ -36,6 +38,46 @@ def make_app_payload(
         "lastUpdate": last_update,
         "workspaceId": workspace_id,
     }
+
+
+def make_app_report_payload(
+    *,
+    id: str = APP_REPORT_ID,
+    name: str = "Test Report",
+    dataset_id: str = "",  # always empty in app context — this is intentional
+    original_report_object_id: str = ORIGINAL_REPORT_ID,
+    workspace_id: str = WORKSPACE_ID,
+    web_url: str = "https://app.powerbi.com/groups/me/reports/rrrrrrrr",
+) -> dict:
+    """App-context report as returned by GET /apps/{appId}/reports."""
+    return {
+        "id": id,
+        "name": name,
+        "datasetId": dataset_id,
+        "originalReportObjectId": original_report_object_id,
+        "workspaceId": workspace_id,
+        "webUrl": web_url,
+    }
+
+
+def make_workspace_report_payload(
+    *,
+    id: str = ORIGINAL_REPORT_ID,
+    name: str = "Test Report",
+    dataset_id: str = DATASET_ID,
+    dataset_workspace_id: str | None = None,
+    web_url: str = "https://app.powerbi.com/groups/me/reports/rrrrrrrr",
+) -> dict:
+    """Workspace-context report as returned by GET /groups/{ws}/reports/{id}."""
+    payload: dict = {
+        "id": id,
+        "name": name,
+        "datasetId": dataset_id,
+        "webUrl": web_url,
+    }
+    if dataset_workspace_id is not None:
+        payload["datasetWorkspaceId"] = dataset_workspace_id
+    return payload
 
 
 def make_workspace_payload(

@@ -53,12 +53,22 @@ Integration tests (tagged `integration`) require a live Power BI token and are s
 
 ## Dataset Discovery
 
-All tools use in-group (`/groups/`) API endpoints. The correct discovery flow is:
+The correct discovery flow is:
 
 ```
-list_apps → workspaceId → list_datasets(workspace_id) → dataset_id → execute_dax / list_tables / etc.
+list_apps → app.id → list_datasets(app_id) → {dataset_id, workspaceId} → execute_dax / list_tables / etc.
 ```
 
-**The `list_workspaces` tool has been removed.** It caused permission errors in app-managed orgs because dataset access is granted through Power BI apps, not direct workspace membership. The workspace_id for all tool calls must come from `list_apps` (the `workspaceId` field), never from workspace enumeration.
+**Why `app_id` for `list_datasets`:**  
+`GET /groups/{ws}/datasets` requires direct workspace membership — Miinto users don't have that.  
+`list_datasets` instead calls `GET /apps/{appId}/reports` (app-level access), resolves each report
+to its real `datasetId` via the workspace-context report endpoint, then fetches metadata via the
+org-level `GET /datasets/{id}` (Build permission only).
 
-The Power BI REST API has no app-scoped dataset endpoints (`/apps/{appId}/datasets` does not exist). All dataset endpoints remain workspace-scoped — the key difference is that the `workspaceId` must come from the installed app, not from workspace membership.
+**The app-context `datasetId` gotcha:**  
+`GET /apps/{appId}/reports` deliberately returns `datasetId: ""` — the API detaches reports from
+datasets in app context. The real link is:  
+`originalReportObjectId` → `GET /groups/{ws}/reports/{id}` → real `datasetId`
+
+**The `list_workspaces` tool has been removed.** Workspace IDs must come from `list_apps`
+(`workspaceId` field) or from `list_datasets` output (`workspaceId` per dataset).

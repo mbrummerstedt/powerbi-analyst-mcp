@@ -2,14 +2,18 @@
 MCP tools for Power BI operations.
 
 Discovery flow:
-  1. list_apps → get workspaceId from the app response
-  2. list_datasets(workspace_id) → get dataset id
-  3. execute_dax / list_tables / list_measures / list_columns (workspace_id + dataset_id)
+  1. list_apps      → get app id and workspaceId
+  2. list_datasets(app_id)  → discovers datasets via app reports; returns
+                              dataset id + workspaceId per dataset
+  3. execute_dax / list_tables / list_measures / list_columns
+                    → use workspace_id (from step 2) + dataset_id
 
-All operations use in-group (/groups/) endpoints. The workspace_id must always
-come from list_apps (the app's workspaceId), never from workspace enumeration.
-Permissions at Miinto are granted through Power BI apps, not direct workspace
-membership — using the wrong workspace_id source causes 403 errors.
+Why app_id and not workspace_id for list_datasets:
+  GET /groups/{ws}/datasets requires direct workspace membership, which
+  Miinto users don't have — access is granted through Power BI apps.
+  The correct path is GET /apps/{appId}/reports, then resolving the real
+  datasetId via the workspace-context report (app-context reports return
+  datasetId: "" deliberately).
 """
 
 from __future__ import annotations
@@ -166,8 +170,10 @@ def register_tools(
         Returns each app's id, name, description, publisher, last update time,
         and workspaceId of the underlying workspace.
 
-        Use the `workspaceId` field as `workspace_id` in `list_datasets` and
-        `get_dataset_info`.
+        Use the `id` field as `app_id` in `list_datasets`.
+        Use the `workspaceId` field as `workspace_id` in `get_dataset_info`,
+        `list_tables`, `list_measures`, `list_columns`, and `execute_dax`.
+        (`list_datasets` resolves the workspace automatically — no need to pass it.)
 
         This is the correct starting point for dataset discovery — at Miinto
         all dataset access is managed through Power BI apps, so always start
@@ -198,43 +204,48 @@ def register_tools(
 
     @mcp.tool()
     async def list_datasets(
-        workspace_id: Annotated[
+        app_id: Annotated[
             str,
-            "The GUID of the Power BI workspace that backs the app. "
-            "Get this from `list_apps` — use the `workspaceId` field, not the app `id`.",
+            "The app GUID from `list_apps` — use the `id` field, not `workspaceId`.",
         ],
     ) -> str:
         """
-        List all datasets (semantic models) in a Power BI workspace.
+        List all datasets (semantic models) accessible through a Power BI app.
 
-        Returns dataset id, name, configured-by, web URL, is-refreshable flag,
-        and the target storage mode (Import / DirectQuery / etc.).
-        Use the `id` field as `dataset_id` in subsequent tools.
+        Returns each dataset's id, name, configured-by, web URL, storage mode,
+        and the workspaceId that owns the dataset.  Use `id` as `dataset_id`
+        and `workspaceId` as `workspace_id` in subsequent tools
+        (`list_tables`, `list_measures`, `list_columns`, `execute_dax`).
 
-        The workspace_id must come from `list_apps` (workspaceId field), not
-        from `list_workspaces` — using the app-backed workspace ensures you
-        are working within the correct permission boundary.
+        Use `app_id` from `list_apps` (the `id` field).
+        The workspace is resolved automatically from the app.
         """
         client = _get_client()
         try:
-            datasets = await client.list_datasets(workspace_id)
+            # Resolve the app's workspaceId first — an app always belongs to one workspace.
+            apps = await client.list_apps()
+            app = next((a for a in apps if a.id == app_id), None)
+            if app is None or not app.workspace_id:
+                return f"App {app_id!r} not found or has no workspaceId. Call `list_apps` first."
+            results = await client.list_datasets(app_id, app.workspace_id)
         except PowerBIError as exc:
             return f"Error listing datasets: {exc}"
 
-        if not datasets:
-            return f"No datasets found in workspace {workspace_id!r}."
+        if not results:
+            return f"No datasets found for app {app_id!r}."
 
         summary = [
             {
                 "id": ds.id,
                 "name": ds.name,
+                "workspaceId": ws_id,
                 "configuredBy": ds.configured_by,
                 "targetStorageMode": ds.target_storage_mode,
                 "isRefreshable": ds.is_refreshable,
                 "createdDate": ds.created_date,
                 "webUrl": ds.web_url,
             }
-            for ds in datasets
+            for ds, ws_id in results
         ]
 
         return _fmt_json(summary)

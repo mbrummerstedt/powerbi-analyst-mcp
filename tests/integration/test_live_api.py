@@ -13,7 +13,6 @@ fields) — no hardcoded workspace or dataset IDs are required.
 
 from __future__ import annotations
 
-import json
 import uuid
 
 import pytest
@@ -60,15 +59,18 @@ class TestLiveListApps:
             if app.workspace_id:
                 uuid.UUID(app.workspace_id)
 
-    async def test_workspace_id_can_list_datasets(self, live_client: PowerBIClient):
-        """The workspaceId from an app should be usable to list datasets."""
+    async def test_app_id_can_list_datasets(self, live_client: PowerBIClient):
+        """The app id should discover datasets via the app reports endpoint."""
         apps = await live_client.list_apps()
-        for app in apps:
-            if app.workspace_id:
-                datasets = await live_client.list_datasets(app.workspace_id)
-                assert isinstance(datasets, list)
-                return
-        pytest.skip("No apps with workspaceId found")
+        if not apps:
+            pytest.skip("No installed apps for this account")
+        results = await live_client.list_datasets(apps[0].id, apps[0].workspace_id)
+        assert isinstance(results, list)
+        for ds, ws_id in results:
+            assert ds.id
+            assert ds.name
+            uuid.UUID(ds.id)
+            uuid.UUID(ws_id)
 
 
 # ---------------------------------------------------------------------------
@@ -86,35 +88,35 @@ class TestLiveListWorkspaces:
         for ws in workspaces:
             assert ws.id, "workspace id must be non-empty"
             assert ws.name, "workspace name must be non-empty"
-            # id should be a valid UUID
             uuid.UUID(ws.id)
 
 
 # ---------------------------------------------------------------------------
-# Datasets
+# Datasets (via app reports)
 # ---------------------------------------------------------------------------
 
 
 class TestLiveListDatasets:
-    async def test_datasets_in_first_workspace(self, live_client: PowerBIClient):
-        workspaces = await live_client.list_workspaces()
-        if not workspaces:
-            pytest.skip("No workspaces available for this account")
-        datasets = await live_client.list_datasets(workspaces[0].id)
+    async def test_datasets_from_first_app(self, live_client: PowerBIClient):
+        apps = await live_client.list_apps()
+        if not apps:
+            pytest.skip("No installed apps for this account")
+        results = await live_client.list_datasets(apps[0].id, apps[0].workspace_id)
         # May be empty — just assert the call succeeds and returns a list
-        assert isinstance(datasets, list)
+        assert isinstance(results, list)
 
     async def test_dataset_fields_when_present(self, live_client: PowerBIClient):
-        workspaces = await live_client.list_workspaces()
-        for ws in workspaces:
-            datasets = await live_client.list_datasets(ws.id)
-            if datasets:
-                ds = datasets[0]
+        apps = await live_client.list_apps()
+        for app in apps:
+            results = await live_client.list_datasets(app.id, app.workspace_id)
+            if results:
+                ds, ws_id = results[0]
                 assert ds.id
                 assert ds.name
                 uuid.UUID(ds.id)
+                uuid.UUID(ws_id)
                 return
-        pytest.skip("No datasets found across all workspaces")
+        pytest.skip("No datasets found across all apps")
 
 
 # ---------------------------------------------------------------------------
@@ -124,15 +126,15 @@ class TestLiveListDatasets:
 
 class TestLiveGetDatasetInfo:
     async def test_response_has_expected_fields(self, live_client: PowerBIClient):
-        workspaces = await live_client.list_workspaces()
-        for ws in workspaces:
-            datasets = await live_client.list_datasets(ws.id)
-            if datasets:
-                ds = datasets[0]
-                info = await live_client.get_dataset(ws.id, ds.id)
+        apps = await live_client.list_apps()
+        for app in apps:
+            results = await live_client.list_datasets(app.id, app.workspace_id)
+            if results:
+                ds, ws_id = results[0]
+                info = await live_client.get_dataset(ws_id, ds.id)
                 assert info.id == ds.id
                 assert info.name == ds.name
-                history = await live_client.get_dataset_refresh_history(ws.id, ds.id, top=5)
+                history = await live_client.get_dataset_refresh_history(ws_id, ds.id, top=5)
                 assert isinstance(history, list)
                 return
         pytest.skip("No datasets found")
@@ -146,13 +148,14 @@ class TestLiveGetDatasetInfo:
 class TestLiveExecuteDax:
     async def test_row_function_returns_one_row(self, live_client: PowerBIClient):
         """EVALUATE ROW(...) always returns exactly 1 row regardless of dataset."""
-        workspaces = await live_client.list_workspaces()
-        for ws in workspaces:
-            datasets = await live_client.list_datasets(ws.id)
-            if datasets:
+        apps = await live_client.list_apps()
+        for app in apps:
+            results = await live_client.list_datasets(app.id, app.workspace_id)
+            if results:
+                ds, ws_id = results[0]
                 raw = await live_client.execute_dax(
-                    ws.id,
-                    datasets[0].id,
+                    ws_id,
+                    ds.id,
                     'EVALUATE ROW("TestColumn", 42)',
                 )
                 from powerbi_mcp.client import _parse_dax_rows

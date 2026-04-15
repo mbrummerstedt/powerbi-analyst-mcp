@@ -27,11 +27,13 @@ from msal_extensions import (
 AUTHORITY_BASE = "https://login.microsoftonline.com"
 
 # Delegated scopes required for the tools in this server:
-#   Dataset.Read.All   - list datasets, execute queries, read metadata
-#   Workspace.Read.All - list workspaces (groups)
+#   Dataset.Read.All   - execute DAX queries, read dataset metadata
+#   Report.Read.All    - GET /apps/{appId}/reports (dataset discovery path)
+#   Workspace.Read.All - resolve workspace-context reports for real datasetId
 #   App.Read.All       - list installed apps
 SCOPES = [
     "https://analysis.windows.net/powerbi/api/Dataset.Read.All",
+    "https://analysis.windows.net/powerbi/api/Report.Read.All",
     "https://analysis.windows.net/powerbi/api/Workspace.Read.All",
     "https://analysis.windows.net/powerbi/api/App.Read.All",
 ]
