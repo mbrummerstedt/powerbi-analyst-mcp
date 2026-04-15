@@ -101,6 +101,32 @@ The agent explores the schema, writes the DAX, handles the file, and delivers th
 
 ---
 
+## Knowledge layer integration
+
+This bundle includes four tools that talk to the [Miinto BI Knowledge Layer](https://bi-knowledge.miintolabs.com) — a FastAPI service that owns canonical metric definitions and cross-entity semantic search. When configured, these tools let Claude answer questions about *what* a metric means and *which* dataset/variant to use before it writes any DAX.
+
+| Tool | When to use |
+|---|---|
+| `search_knowledge(query, limit?)` | Use **before writing DAX** for any ad-hoc question. Returns the minimal set of entities needed: metric, variant, dimension, dataset, opinions. |
+| `get_metric(name)` | Full definition of one parent metric — description, variants, caveats, thresholds, trust state, applicable opinions. |
+| `list_knowledge_metrics(domain?)` | Browse the metric catalog grouped by domain. |
+| `list_dimensions()` | List curated dimensions with dataset mappings. |
+
+### Setup
+
+Add to your Claude Desktop config (or `.env`):
+
+```json
+"env": {
+  "KNOWLEDGE_API_BASE": "https://<railway-url>",
+  "KNOWLEDGE_API_KEY": "<shared-key>"
+}
+```
+
+The BI team provisions the key. If the env vars are not set, Power BI tools continue to work normally — the knowledge tools raise a clear error when called.
+
+---
+
 ## User guide
 
 ### Prerequisites
