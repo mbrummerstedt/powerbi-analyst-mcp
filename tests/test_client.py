@@ -237,10 +237,11 @@ class TestGetDatasetRefreshHistory:
 
 class TestExecuteDax:
     @respx.mock
-    async def test_posts_to_in_group_url(self, client: PowerBIClient):
-        """execute_dax uses the workspace-scoped in-group endpoint."""
+    async def test_posts_to_org_level_url(self, client: PowerBIClient):
+        """execute_dax uses the org-level endpoint so app-granted access works
+        (in-group requires workspace membership, which app users don't have)."""
         route = respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
         await client.execute_dax(WORKSPACE_ID, DATASET_ID, "EVALUATE ROW(\"x\", 1)")
         assert route.called
@@ -250,7 +251,7 @@ class TestExecuteDax:
         import json
 
         route = respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
         dax = "EVALUATE ROW(\"x\", 1)"
         await client.execute_dax(WORKSPACE_ID, DATASET_ID, dax)
@@ -261,7 +262,7 @@ class TestExecuteDax:
     @respx.mock
     async def test_api_error_raises(self, client: PowerBIClient):
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(400, json={"error": {"message": "Invalid DAX"}}))
         with pytest.raises(PowerBIError) as exc_info:
             await client.execute_dax(WORKSPACE_ID, DATASET_ID, "INVALID")
@@ -274,7 +275,7 @@ class TestListTables:
         row = make_table_dax_row("Sales")
         bracketed = {f"[{k}]": v for k, v in row.items()}
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([bracketed])))
         result = await client.list_tables(WORKSPACE_ID, DATASET_ID)
         assert len(result) == 1
@@ -286,7 +287,7 @@ class TestListTables:
         import json
 
         route = respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
         await client.list_tables(WORKSPACE_ID, DATASET_ID)
         body = json.loads(route.calls.last.request.content)
@@ -299,7 +300,7 @@ class TestListMeasures:
         row = make_measure_dax_row()
         bracketed = {f"[{k}]": v for k, v in row.items()}
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([bracketed])))
         result = await client.list_measures(WORKSPACE_ID, DATASET_ID)
         assert len(result) == 1
@@ -311,7 +312,7 @@ class TestListMeasures:
         import json
 
         route = respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
         await client.list_measures(WORKSPACE_ID, DATASET_ID)
         body = json.loads(route.calls.last.request.content)
@@ -324,7 +325,7 @@ class TestListMeasures:
         import json
 
         route = respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
         await client.list_measures(WORKSPACE_ID, DATASET_ID, table_name="Sales")
         body = json.loads(route.calls.last.request.content)
@@ -337,7 +338,7 @@ class TestListColumns:
         row = make_column_dax_row()
         bracketed = {f"[{k}]": v for k, v in row.items()}
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([bracketed])))
         result = await client.list_columns(WORKSPACE_ID, DATASET_ID)
         assert len(result) == 1
@@ -349,7 +350,7 @@ class TestListColumns:
         import json
 
         route = respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
         await client.list_columns(WORKSPACE_ID, DATASET_ID)
         body = json.loads(route.calls.last.request.content)
@@ -363,7 +364,7 @@ class TestListColumns:
         import json
 
         route = respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
         await client.list_columns(WORKSPACE_ID, DATASET_ID, table_name="Products")
         body = json.loads(route.calls.last.request.content)

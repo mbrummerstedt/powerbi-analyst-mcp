@@ -152,9 +152,13 @@ class PowerBIClient:
         include_nulls:
             Whether to include null values in the result rows.
         """
-        url = (
-            f"{BASE_URL}/groups/{workspace_id}/datasets/{dataset_id}/executeQueries"
-        )
+        # Use org-level endpoint (not in-group) so app-granted access works.
+        # In-group executeQueries requires workspace membership; org-level only
+        # requires Build permission on the dataset, which is what Power BI Apps
+        # grant. workspace_id is kept in the signature for API symmetry and
+        # future use but is not part of the URL.
+        del workspace_id  # intentionally unused — see comment above
+        url = f"{BASE_URL}/datasets/{dataset_id}/executeQueries"
         payload = {
             "queries": [{"query": dax_query}],
             "serializerSettings": {"includeNulls": include_nulls},

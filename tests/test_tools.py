@@ -280,7 +280,7 @@ class TestListTables:
         row = make_table_dax_row("Sales")
         bracketed = {f"[{k}]": v for k, v in row.items()}
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([bracketed])))
         result = await call(
             mcp_with_tools, "list_tables",
@@ -293,7 +293,7 @@ class TestListTables:
     @respx.mock
     async def test_empty_returns_human_message(self, mcp_with_tools: FastMCP):
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
         result = await call(
             mcp_with_tools, "list_tables",
@@ -305,7 +305,7 @@ class TestListTables:
     @respx.mock
     async def test_api_error_includes_xmla_hint(self, mcp_with_tools: FastMCP):
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(
             return_value=Response(400, json={"error": {"message": "DAX error"}})
         )
@@ -329,7 +329,7 @@ class TestListMeasures:
         row = make_measure_dax_row()
         bracketed = {f"[{k}]": v for k, v in row.items()}
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([bracketed])))
         result = await call(
             mcp_with_tools, "list_measures",
@@ -343,7 +343,7 @@ class TestListMeasures:
     @respx.mock
     async def test_empty_without_filter_returns_no_filter_note(self, mcp_with_tools: FastMCP):
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
         result = await call(
             mcp_with_tools, "list_measures",
@@ -356,7 +356,7 @@ class TestListMeasures:
     @respx.mock
     async def test_empty_with_filter_includes_table_note(self, mcp_with_tools: FastMCP):
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
         result = await call(
             mcp_with_tools, "list_measures",
@@ -379,7 +379,7 @@ class TestListColumns:
         row = make_column_dax_row()
         bracketed = {f"[{k}]": v for k, v in row.items()}
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([bracketed])))
         result = await call(
             mcp_with_tools, "list_columns",
@@ -393,7 +393,7 @@ class TestListColumns:
     @respx.mock
     async def test_empty_with_table_filter_includes_note(self, mcp_with_tools: FastMCP):
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
         result = await call(
             mcp_with_tools, "list_columns",
@@ -407,7 +407,7 @@ class TestListColumns:
     @respx.mock
     async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(500, json={"error": {"message": "Server error"}}))
         result = await call(
             mcp_with_tools, "list_columns",
@@ -426,7 +426,7 @@ class TestExecuteDax:
     @respx.mock
     async def test_returns_row_count_and_rows(self, mcp_with_tools: FastMCP):
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(
             return_value=Response(
                 200,
@@ -446,7 +446,7 @@ class TestExecuteDax:
     @respx.mock
     async def test_zero_rows_returns_specific_message(self, mcp_with_tools: FastMCP):
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
         result = await call(
             mcp_with_tools, "execute_dax",
@@ -459,7 +459,7 @@ class TestExecuteDax:
     @respx.mock
     async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(
             return_value=Response(400, json={"error": {"message": "Invalid DAX syntax"}})
         )
@@ -478,7 +478,7 @@ class TestExecuteDax:
         """Results > INLINE_ROW_LIMIT should be saved to CSV; tool returns summary."""
         large_rows = [{"[x]": i} for i in range(INLINE_ROW_LIMIT + 1)]
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response(large_rows)))
 
         result = await call(
@@ -500,7 +500,7 @@ class TestExecuteDax:
         """result_name parameter should appear in the saved CSV filename."""
         large_rows = [{"[x]": i} for i in range(INLINE_ROW_LIMIT + 1)]
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response(large_rows)))
 
         result = await call(
@@ -519,7 +519,7 @@ class TestExecuteDax:
         """Results <= INLINE_ROW_LIMIT should be returned inline without savedTo."""
         small_rows = [{"[x]": i} for i in range(INLINE_ROW_LIMIT)]
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response(small_rows)))
 
         result = await call(
@@ -544,7 +544,7 @@ class TestExecuteDax:
             return Response(200, json=make_dax_response([{"[x]": 1}]))
 
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(side_effect=capture)
 
         await call(
@@ -629,7 +629,7 @@ class TestExecuteDaxHistoryLogging:
     async def test_inline_result_includes_history_entry_id(self, mcp_with_tools: FastMCP):
         """Small results should still log to history and include the entry ID."""
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([{"[x]": 1}])))
 
         result = await call(
@@ -648,7 +648,7 @@ class TestExecuteDaxHistoryLogging:
         """Large CSV results should also log to history and include the entry ID."""
         large_rows = [{"[x]": i} for i in range(INLINE_ROW_LIMIT + 1)]
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response(large_rows)))
 
         result = await call(
@@ -673,7 +673,7 @@ class TestSearchQueryHistory:
     async def test_returns_logged_queries(self, mcp_with_tools: FastMCP):
         """After execute_dax, search_query_history should find the entry."""
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([{"[x]": 42}])))
 
         await call(
@@ -707,7 +707,7 @@ class TestDeleteQueryLogEntryTool:
     async def test_deletes_entry_and_confirms(self, mcp_with_tools: FastMCP):
         """Execute a query, then delete the log entry by ID."""
         respx.post(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
+            f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([{"[x]": 1}])))
 
         exec_result = await call(
