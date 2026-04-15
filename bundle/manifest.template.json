@@ -67,7 +67,11 @@
     { "name": "execute_dax",            "description": "Run a DAX query — inline for small results, local CSV for large ones" },
     { "name": "read_query_result",      "description": "Page through a saved CSV result file" },
     { "name": "search_query_history",   "description": "Search past DAX query history" },
-    { "name": "delete_query_log_entry", "description": "Remove an entry from query history" }
+    { "name": "delete_query_log_entry", "description": "Remove an entry from query history" },
+    {"name": "search_knowledge", "description": "Semantic search across metrics, dimensions, tables, and columns — use before writing DAX"},
+    {"name": "get_metric", "description": "Full definition of a parent metric: variants, caveats, opinions, and trust state"},
+    {"name": "list_knowledge_metrics", "description": "Browse the metric catalog grouped by domain"},
+    {"name": "list_dimensions", "description": "List curated dimensions with dataset mappings"}
   ],
   "compatibility": {
     "claude_desktop": ">=1.0.0",
