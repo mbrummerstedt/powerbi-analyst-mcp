@@ -41,7 +41,13 @@ class KnowledgeClient:
                 headers=self._headers(),
             )
             response.raise_for_status()
-            return response.json()
+            try:
+                return response.json()
+            except Exception as exc:
+                raise ValueError(
+                    f"Non-JSON response from {response.url} "
+                    f"(status {response.status_code})"
+                ) from exc
 
     # --- Search ---
 
@@ -59,7 +65,7 @@ class KnowledgeClient:
 
     async def list_metrics(self, domain: str | None = None) -> dict:
         """List metrics grouped by domain, with variant summaries."""
-        params = {"domain": domain} if domain else None
+        params = {"domain": domain} if domain is not None else None
         return await self._get("/metrics", params)
 
     # --- Dimensions ---
