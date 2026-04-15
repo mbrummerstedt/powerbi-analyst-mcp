@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "powerbi-analyst-mcp",
   "display_name": "Power BI Analyst",
-  "version": "0.4.2",
+  "version": "0.4.3",
   "description": "Query and analyse Power BI semantic models with Claude. Explore tables and measures, run DAX queries, and work with real results — even across datasets with tens of thousands of rows.",
   "author": {
     "name": "Martin Brummerstedt",
