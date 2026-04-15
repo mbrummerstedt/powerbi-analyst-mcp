@@ -70,12 +70,15 @@ code_tools = set(re.findall(r"@mcp\.tool\(\)\s+async def (\w+)", tools_py))
 manifest_tools = {t["name"] for t in manifest.get("tools", [])}
 
 missing_from_manifest = code_tools - manifest_tools
+missing_from_code = manifest_tools - code_tools
 
-if missing_from_manifest:
-    sys.exit(
-        f"ERROR: Tools in tools.py but NOT in manifest: {sorted(missing_from_manifest)}\n"
-        "  Add them to bundle/manifest.json before rebuilding."
-    )
+if missing_from_manifest or missing_from_code:
+    msgs = []
+    if missing_from_manifest:
+        msgs.append(f"Tools in code but NOT in manifest: {sorted(missing_from_manifest)}")
+    if missing_from_code:
+        msgs.append(f"Tools in manifest but NOT in code: {sorted(missing_from_code)}")
+    sys.exit("ERROR: Manifest/code tool mismatch!\n  " + "\n  ".join(msgs))
 
 print(f"Tool check OK: {len(code_tools)} tools in both code and manifest.")
 

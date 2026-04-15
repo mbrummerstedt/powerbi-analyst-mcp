@@ -62,12 +62,3 @@ list_apps → workspaceId → list_datasets(workspace_id) → dataset_id → exe
 **The `list_workspaces` tool has been removed.** It caused permission errors in app-managed orgs because dataset access is granted through Power BI apps, not direct workspace membership. The workspace_id for all tool calls must come from `list_apps` (the `workspaceId` field), never from workspace enumeration.
 
 The Power BI REST API has no app-scoped dataset endpoints (`/apps/{appId}/datasets` does not exist). All dataset endpoints remain workspace-scoped — the key difference is that the `workspaceId` must come from the installed app, not from workspace membership.
-
-## Knowledge Layer Integration
-
-`powerbi_mcp/knowledge.py` and `powerbi_mcp/knowledge_client.py` are now part of this repo. They add four tools that hit the Railway-hosted BI Knowledge Layer.
-
-When working on tool routing:
-- Knowledge tools should be suggested BEFORE `execute_dax` when the user has a semantic/metric question
-- `search_knowledge` is the entry point — the results include which dataset + variant to use
-- The knowledge tools fail fast (RuntimeError) if `KNOWLEDGE_API_BASE`/`KNOWLEDGE_API_KEY` are not set — this is intentional, not a bug
