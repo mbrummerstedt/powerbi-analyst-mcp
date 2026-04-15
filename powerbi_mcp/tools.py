@@ -1,8 +1,15 @@
 """
 MCP tools for Power BI operations.
 
-All MCP tool registrations for interacting with Power BI workspaces,
-datasets, and executing DAX queries.
+Discovery flow:
+  1. list_apps → get workspaceId from the app response
+  2. list_datasets(workspace_id) → get dataset id
+  3. execute_dax / list_tables / list_measures / list_columns (workspace_id + dataset_id)
+
+All operations use in-group (/groups/) endpoints. The workspace_id must always
+come from list_apps (the app's workspaceId), never from workspace enumeration.
+Permissions at Miinto are granted through Power BI apps, not direct workspace
+membership — using the wrong workspace_id source causes 403 errors.
 """
 
 from __future__ import annotations
@@ -152,54 +159,19 @@ def register_tools(
         return "Logged out. Cached credentials have been cleared. Call `authenticate` to sign in again."
 
     @mcp.tool()
-    async def list_workspaces() -> str:
-        """
-        List all Power BI workspaces (groups) the authenticated user is a member of.
-
-        Returns workspace id, name, type, and capacity information.
-        Use the `id` field as `workspace_id` in subsequent tools.
-
-        NOTE: Prefer `list_apps` over this tool. Most organisations manage
-        dataset access through Power BI apps.  Using `list_apps` ensures you
-        only discover datasets the user actually has Build permission to query.
-        Use `list_workspaces` only as a fallback when no apps are installed.
-        """
-        client = _get_client()
-        try:
-            workspaces = await client.list_workspaces()
-        except PowerBIError as exc:
-            return f"Error listing workspaces: {exc}"
-
-        if not workspaces:
-            return "No workspaces found. The user may not be a member of any workspace."
-
-        summary = [
-            {
-                "id": ws.id,
-                "name": ws.name,
-                "type": ws.type,
-                "state": ws.state,
-                "isOnDedicatedCapacity": ws.is_on_dedicated_capacity,
-            }
-            for ws in workspaces
-        ]
-
-        return _fmt_json(summary)
-
-    @mcp.tool()
     async def list_apps() -> str:
         """
         List all Power BI apps installed for the authenticated user.
 
         Returns each app's id, name, description, publisher, last update time,
-        and — most importantly — the `workspaceId` of the underlying workspace.
+        and workspaceId of the underlying workspace.
 
-        Use the `workspaceId` field (not the app `id`) as the `workspace_id`
-        parameter in `list_datasets`, `list_tables`, `execute_dax`, and other
-        dataset tools.
+        Use the `workspaceId` field as `workspace_id` in `list_datasets` and
+        `get_dataset_info`.
 
-        If no apps are installed, try `list_workspaces` instead to find
-        workspaces directly.
+        This is the correct starting point for dataset discovery — at Miinto
+        all dataset access is managed through Power BI apps, so always start
+        here rather than listing workspaces directly.
         """
         client = _get_client()
         try:
@@ -208,10 +180,7 @@ def register_tools(
             return f"Error listing apps: {exc}"
 
         if not apps:
-            return (
-                "No installed apps found. "
-                "Use `list_workspaces` instead to find workspaces directly."
-            )
+            return "No installed apps found."
 
         summary = [
             {
@@ -231,8 +200,8 @@ def register_tools(
     async def list_datasets(
         workspace_id: Annotated[
             str,
-            "The GUID of the Power BI workspace (group) to list datasets from. "
-            "Obtain this from `list_apps` (preferred) or `list_workspaces`.",
+            "The GUID of the Power BI workspace that backs the app. "
+            "Get this from `list_apps` — use the `workspaceId` field, not the app `id`.",
         ],
     ) -> str:
         """
@@ -241,6 +210,10 @@ def register_tools(
         Returns dataset id, name, configured-by, web URL, is-refreshable flag,
         and the target storage mode (Import / DirectQuery / etc.).
         Use the `id` field as `dataset_id` in subsequent tools.
+
+        The workspace_id must come from `list_apps` (workspaceId field), not
+        from `list_workspaces` — using the app-backed workspace ensures you
+        are working within the correct permission boundary.
         """
         client = _get_client()
         try:
@@ -269,7 +242,7 @@ def register_tools(
     @mcp.tool()
     async def get_dataset_info(
         workspace_id: Annotated[
-            str, "GUID of the workspace that contains the dataset."
+            str, "GUID of the workspace that contains the dataset (from list_apps workspaceId)."
         ],
         dataset_id: Annotated[str, "GUID of the dataset to inspect."],
     ) -> str:
@@ -317,7 +290,7 @@ def register_tools(
     @mcp.tool()
     async def list_tables(
         workspace_id: Annotated[
-            str, "GUID of the workspace that contains the dataset."
+            str, "GUID of the workspace that contains the dataset (from list_apps workspaceId)."
         ],
         dataset_id: Annotated[str, "GUID of the dataset to inspect."],
     ) -> str:
@@ -356,7 +329,7 @@ def register_tools(
     @mcp.tool()
     async def list_measures(
         workspace_id: Annotated[
-            str, "GUID of the workspace that contains the dataset."
+            str, "GUID of the workspace that contains the dataset (from list_apps workspaceId)."
         ],
         dataset_id: Annotated[str, "GUID of the dataset to inspect."],
         table_name: Annotated[
@@ -396,7 +369,7 @@ def register_tools(
     @mcp.tool()
     async def list_columns(
         workspace_id: Annotated[
-            str, "GUID of the workspace that contains the dataset."
+            str, "GUID of the workspace that contains the dataset (from list_apps workspaceId)."
         ],
         dataset_id: Annotated[str, "GUID of the dataset to inspect."],
         table_name: Annotated[
@@ -437,7 +410,7 @@ def register_tools(
     @mcp.tool()
     async def execute_dax(
         workspace_id: Annotated[
-            str, "GUID of the workspace that contains the dataset."
+            str, "GUID of the workspace that contains the dataset (from list_apps workspaceId)."
         ],
         dataset_id: Annotated[str, "GUID of the dataset to query."],
         dax_query: Annotated[
@@ -511,11 +484,8 @@ def register_tools(
                 return (
                     f"DAX query error: {exc}\n\n"
                     "This usually means the user lacks Build permission on this "
-                    "dataset. If the organisation manages access through Power BI "
-                    "apps, make sure the dataset belongs to an app the user has "
-                    "installed (check with `list_apps`). Datasets discovered via "
-                    "`list_workspaces` may be visible but not queryable without "
-                    "explicit Build permission."
+                    "dataset. Ensure workspace_id comes from `list_apps` "
+                    "(the workspaceId field) and not from `list_workspaces`."
                 )
             return f"DAX query error: {exc}"
 
@@ -531,7 +501,6 @@ def register_tools(
 
         if len(rows) <= INLINE_ROW_LIMIT:
             log_entry = make_log_entry(
-                workspace_id=workspace_id,
                 dataset_id=dataset_id,
                 dax_query=original_dax,
                 row_count=len(rows),
@@ -557,7 +526,6 @@ def register_tools(
             return _fmt_json({"rowCount": len(rows), "rows": rows, "saveError": str(exc)})
 
         log_entry = make_log_entry(
-            workspace_id=workspace_id,
             dataset_id=dataset_id,
             dax_query=original_dax,
             row_count=len(rows),

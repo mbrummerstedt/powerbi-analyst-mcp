@@ -34,15 +34,15 @@ mcp = FastMCP(
 
         Typical workflow:
         1. Call `authenticate` if this is the first run or the token has expired.
-        2. Call `list_apps` to find installed apps and their workspace IDs.
-           If no apps are installed, fall back to `list_workspaces`.
-        3. Call `list_datasets` with the workspace_id from the app.
+        2. Call `list_apps` to find installed apps and get their workspaceId.
+        3. Call `list_datasets` with the workspaceId from the app response.
         4. Call `list_tables`, `list_measures`, or `list_columns` to explore
            the data model structure.
         5. Call `execute_dax` to retrieve data using a DAX query.
 
-        All dataset operations require BOTH a workspace_id AND a dataset_id
-        because datasets always belong to a workspace (group) in Power BI.
+        All dataset operations require BOTH a workspace_id AND a dataset_id.
+        The workspace_id must come from `list_apps` (the workspaceId field) —
+        never from workspace enumeration. Permissions are granted through apps.
         """
     ),
 )

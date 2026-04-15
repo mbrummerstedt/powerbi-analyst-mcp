@@ -31,7 +31,6 @@ def _log_path(output_dir: str) -> Path:
 
 def make_log_entry(
     *,
-    workspace_id: str,
     dataset_id: str,
     dax_query: str,
     row_count: int,
@@ -45,7 +44,6 @@ def make_log_entry(
     return {
         "id": str(uuid.uuid4()),
         "timestamp": datetime.now().isoformat(),
-        "workspace_id": workspace_id,
         "dataset_id": dataset_id,
         "query_summary": query_summary,
         "dax_query": dax_query,

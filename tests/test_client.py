@@ -237,7 +237,8 @@ class TestGetDatasetRefreshHistory:
 
 class TestExecuteDax:
     @respx.mock
-    async def test_posts_to_correct_url(self, client: PowerBIClient):
+    async def test_posts_to_in_group_url(self, client: PowerBIClient):
+        """execute_dax uses the workspace-scoped in-group endpoint."""
         route = respx.post(
             f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))

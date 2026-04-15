@@ -166,7 +166,8 @@ class TestLogout:
 
 class TestListApps:
     @respx.mock
-    async def test_happy_path_returns_json(self, mcp_with_tools: FastMCP):
+    async def test_happy_path_returns_json_with_workspace_id(self, mcp_with_tools: FastMCP):
+        """list_apps must return workspaceId — it is the entry point for all dataset access."""
         respx.get(f"{BASE}/apps").mock(
             return_value=Response(200, json={"value": [make_app_payload()]})
         )
@@ -178,13 +179,12 @@ class TestListApps:
         assert data[0]["workspaceId"] == WORKSPACE_ID
 
     @respx.mock
-    async def test_empty_list_suggests_list_workspaces(self, mcp_with_tools: FastMCP):
+    async def test_empty_list_returns_no_apps_message(self, mcp_with_tools: FastMCP):
         respx.get(f"{BASE}/apps").mock(
             return_value=Response(200, json={"value": []})
         )
         result = await call(mcp_with_tools, "list_apps")
         assert "No installed apps" in result
-        assert "list_workspaces" in result
 
     @respx.mock
     async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
@@ -193,40 +193,6 @@ class TestListApps:
         )
         result = await call(mcp_with_tools, "list_apps")
         assert "Error listing apps" in result
-
-
-# ---------------------------------------------------------------------------
-# list_workspaces
-# ---------------------------------------------------------------------------
-
-
-class TestListWorkspaces:
-    @respx.mock
-    async def test_happy_path_returns_json(self, mcp_with_tools: FastMCP):
-        respx.get(f"{BASE}/groups").mock(
-            return_value=Response(200, json={"value": [make_workspace_payload()]})
-        )
-        result = await call(mcp_with_tools, "list_workspaces")
-        data = json.loads(result)
-        assert len(data) == 1
-        assert data[0]["id"] == WORKSPACE_ID
-        assert data[0]["name"] == "Test Workspace"
-
-    @respx.mock
-    async def test_empty_list_returns_human_message(self, mcp_with_tools: FastMCP):
-        respx.get(f"{BASE}/groups").mock(
-            return_value=Response(200, json={"value": []})
-        )
-        result = await call(mcp_with_tools, "list_workspaces")
-        assert "No workspaces found" in result
-
-    @respx.mock
-    async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
-        respx.get(f"{BASE}/groups").mock(
-            return_value=Response(403, json={"error": {"message": "Forbidden"}})
-        )
-        result = await call(mcp_with_tools, "list_workspaces")
-        assert "Error listing workspaces" in result
 
 
 # ---------------------------------------------------------------------------

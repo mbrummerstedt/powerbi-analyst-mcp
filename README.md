@@ -88,8 +88,8 @@ The agent explores the schema, writes the DAX, handles the file, and delivers th
 |---|---|
 | `authenticate` | Sign in via OAuth device code — returns a URL + one-time code; call again to complete |
 | `logout` | Clear the cached token (forces re-authentication) |
-| `list_workspaces` | List all workspaces you have access to |
-| `list_datasets` | List datasets / semantic models in a workspace |
+| `list_apps` | List all Power BI apps you have access to — **start here**; returns `workspaceId` for each app |
+| `list_datasets` | List datasets / semantic models in a workspace (use `workspaceId` from `list_apps`) |
 | `get_dataset_info` | Metadata and last 5 refresh history entries for a dataset |
 | `list_tables` | All visible tables in a dataset |
 | `list_measures` | Measures with name, table, description, and format string |
@@ -245,8 +245,8 @@ Once connected, ask your LLM to follow this sequence naturally:
 ```
 1. authenticate          ← first run only; returns a URL + code to open in browser,
                            then call authenticate again to complete sign-in
-2. list_workspaces       → returns workspace IDs
-3. list_datasets         workspace_id=<id>   → returns dataset IDs
+2. list_apps             → returns installed apps, each with a workspaceId
+3. list_datasets         workspace_id=<workspaceId from app>   → returns dataset IDs
 4. list_tables           workspace_id=<id>   dataset_id=<id>
 5. list_measures         workspace_id=<id>   dataset_id=<id>   [table_name=<name>]
 6. list_columns          workspace_id=<id>   dataset_id=<id>   [table_name=<name>]
@@ -259,6 +259,8 @@ Once connected, ask your LLM to follow this sequence naturally:
 9. read_query_result     file_path=<savedTo>   [offset=0]   [limit=100]
                          ← page through large results without filling context
 ```
+
+> **Note:** Always use `list_apps` (not `list_workspaces`) to discover workspace IDs. In app-managed organisations, dataset access is granted through Power BI apps — using workspace IDs from `list_workspaces` may result in permission errors.
 
 ### DAX query examples
 

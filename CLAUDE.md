@@ -46,12 +46,19 @@ The bundle is for **internal distribution only** — share it directly with user
 ## Running Tests
 
 ```bash
-.venv/bin/python -m pytest tests/ -x -q
+uv run --extra dev python -m pytest tests/ -x -q
 ```
 
 Integration tests (tagged `integration`) require a live Power BI token and are skipped by default.
 
 ## Dataset Discovery
 
-The preferred discovery flow for app-managed orgs is `list_apps` → `list_datasets`, not `list_workspaces`.
-`list_workspaces` is a fallback for when no apps are installed.
+All tools use in-group (`/groups/`) API endpoints. The correct discovery flow is:
+
+```
+list_apps → workspaceId → list_datasets(workspace_id) → dataset_id → execute_dax / list_tables / etc.
+```
+
+**The `list_workspaces` tool has been removed.** It caused permission errors in app-managed orgs because dataset access is granted through Power BI apps, not direct workspace membership. The workspace_id for all tool calls must come from `list_apps` (the `workspaceId` field), never from workspace enumeration.
+
+The Power BI REST API has no app-scoped dataset endpoints (`/apps/{appId}/datasets` does not exist). All dataset endpoints remain workspace-scoped — the key difference is that the `workspaceId` must come from the installed app, not from workspace membership.

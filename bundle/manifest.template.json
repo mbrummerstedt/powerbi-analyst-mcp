@@ -2,7 +2,7 @@
   "manifest_version": "0.4",
   "name": "powerbi-analyst-mcp",
   "display_name": "Power BI Analyst",
-  "version": "0.3.1",
+  "version": "0.4.2",
   "description": "Query and analyse Power BI semantic models with Claude. Explore tables and measures, run DAX queries, and work with real results — even across datasets with tens of thousands of rows.",
   "author": {
     "name": "Martin Brummerstedt",
@@ -58,8 +58,8 @@
   "tools": [
     { "name": "authenticate",           "description": "Sign in via OAuth device code flow" },
     { "name": "logout",                 "description": "Clear the cached token" },
-    { "name": "list_workspaces",        "description": "List all Power BI workspaces you have access to" },
-    { "name": "list_datasets",          "description": "List datasets / semantic models in a workspace" },
+    { "name": "list_apps",              "description": "List all installed Power BI apps — starting point for dataset discovery" },
+    { "name": "list_datasets",          "description": "List datasets / semantic models in an app" },
     { "name": "get_dataset_info",       "description": "Metadata and refresh history for a dataset" },
     { "name": "list_tables",            "description": "All visible tables in a dataset" },
     { "name": "list_measures",          "description": "Measures with name, table, description, and format string" },

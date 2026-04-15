@@ -1,9 +1,13 @@
 """
 Async Power BI REST API client.
 
-All dataset operations are group-scoped, i.e. they use
+Discovery uses workspace-scoped endpoints (workspace ID obtained from the
+installed app via list_apps):
   GET /v1.0/myorg/groups/{workspace_id}/datasets/...
-because datasets live inside workspaces (groups) in Power BI.
+
+DAX execution uses the org-level endpoint which requires only Build permission
+and works for app-granted access without direct workspace membership:
+  POST /v1.0/myorg/datasets/{dataset_id}/executeQueries
 
 Reference: https://learn.microsoft.com/en-us/rest/api/power-bi/
 """
@@ -77,7 +81,8 @@ class PowerBIClient:
         Parameters
         ----------
         workspace_id:
-            The GUID of the workspace (group).
+            The GUID of the workspace (group). Obtain this from list_apps
+            via the workspaceId field — do not use list_workspaces.
         """
         url = f"{BASE_URL}/groups/{workspace_id}/datasets"
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
@@ -118,6 +123,10 @@ class PowerBIClient:
         """
         Execute a DAX query against a dataset and return the raw API response.
 
+        Uses the in-group executeQueries endpoint. The workspace_id must come
+        from list_apps (the app's workspaceId field), not from list_workspaces —
+        this ensures the correct app-granted permission context is used.
+
         The response shape is:
         {
           "results": [
@@ -134,7 +143,8 @@ class PowerBIClient:
         Parameters
         ----------
         workspace_id:
-            GUID of the workspace that owns the dataset.
+            GUID of the workspace (group) that owns the dataset. Must be
+            obtained from list_apps workspaceId, not list_workspaces.
         dataset_id:
             GUID of the dataset to query.
         dax_query:

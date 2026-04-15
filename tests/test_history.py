@@ -33,7 +33,6 @@ def _make_entry(
     max_rows: int | None = None,
 ) -> dict:
     return make_log_entry(
-        workspace_id="ws-1",
         dataset_id=dataset_id,
         dax_query=dax_query,
         row_count=row_count,
@@ -66,7 +65,6 @@ class TestMakeLogEntry:
             csv_path="/tmp/result.csv",
             max_rows=500,
         )
-        assert entry["workspace_id"] == "ws-1"
         assert entry["dataset_id"] == "ds-1"
         assert entry["query_summary"] == "Revenue by market"
         assert entry["dax_query"] == "EVALUATE Sales"
