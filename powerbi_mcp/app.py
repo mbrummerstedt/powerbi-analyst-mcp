@@ -13,6 +13,7 @@ from mcp.server.fastmcp import FastMCP
 from pydantic import ValidationError
 
 from .config import Settings
+from .knowledge import register_knowledge_tools
 from .tools import register_tools
 
 try:
@@ -48,6 +49,7 @@ mcp = FastMCP(
 )
 
 register_tools(mcp, settings.client_id, settings.tenant_id, settings.output_dir)
+register_knowledge_tools(mcp)
 
 
 def main() -> None:

@@ -112,3 +112,18 @@ async def list_dimensions() -> list[dict]:
     """
     client = _get_client()
     return await client.list_dimensions()
+
+
+def register_knowledge_tools(mcp: "FastMCP") -> None:
+    """Register all knowledge-layer tools with the FastMCP instance.
+
+    Called from app.py after the PBI tools are registered. Exposes
+    search_knowledge, get_metric, list_knowledge_metrics, and
+    list_dimensions alongside the existing Power BI tools.
+    """
+    from mcp.server.fastmcp import FastMCP  # noqa: F401 — imported for type-check only
+
+    mcp.add_tool(search_knowledge)
+    mcp.add_tool(get_metric)
+    mcp.add_tool(list_metrics, name="list_knowledge_metrics")
+    mcp.add_tool(list_dimensions)
