@@ -13,6 +13,7 @@ from httpx import Response
 from powerbi_mcp.client import (
     PowerBIClient,
     PowerBIError,
+    _dataset_name_from_reports,
     _parse_dax_rows,
     _strip_brackets,
 )
@@ -179,7 +180,7 @@ class TestListDatasets:
         respx.get(f"{BASE}/reports").mock(
             return_value=Response(200, json={"value": [make_user_report_payload()]})
         )
-        respx.get(f"{BASE}/datasets/{DATASET_ID}").mock(
+        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
             return_value=Response(200, json=make_dataset_payload())
         )
         result = await client.list_datasets(APP_ID, WORKSPACE_ID)
@@ -205,7 +206,7 @@ class TestListDatasets:
         respx.get(f"{BASE}/reports").mock(
             return_value=Response(200, json={"value": [report_a, report_b]})
         )
-        respx.get(f"{BASE}/datasets/{DATASET_ID}").mock(
+        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
             return_value=Response(200, json=make_dataset_payload())
         )
         result = await client.list_datasets(APP_ID, WORKSPACE_ID)
@@ -222,7 +223,7 @@ class TestListDatasets:
         respx.get(f"{BASE}/reports").mock(
             return_value=Response(200, json={"value": [wrong_ws_report, right_ws_report]})
         )
-        respx.get(f"{BASE}/datasets/{DATASET_ID}").mock(
+        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
             return_value=Response(200, json=make_dataset_payload())
         )
         result = await client.list_datasets(APP_ID, WORKSPACE_ID)
@@ -239,11 +240,48 @@ class TestListDatasets:
         respx.get(f"{BASE}/reports").mock(
             return_value=Response(200, json={"value": [valid, no_dataset_id, no_workspace_id]})
         )
-        respx.get(f"{BASE}/datasets/{DATASET_ID}").mock(
+        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
             return_value=Response(200, json=make_dataset_payload())
         )
         result = await client.list_datasets(APP_ID, WORKSPACE_ID)
         assert len(result) == 1
+
+    @respx.mock
+    async def test_synthesizes_dataset_on_api_error(self, client: PowerBIClient):
+        """When get_dataset returns 401/404, a Dataset is synthesised from report names."""
+        report = make_user_report_payload(name="Sales - Report Template")
+        respx.get(f"{BASE}/reports").mock(
+            return_value=Response(200, json={"value": [report]})
+        )
+        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
+            return_value=Response(401, json={"error": {"message": "Unauthorized"}})
+        )
+        result = await client.list_datasets(APP_ID, WORKSPACE_ID)
+        assert len(result) == 1
+        ds, ws_id = result[0]
+        assert isinstance(ds, Dataset)
+        assert ds.id == DATASET_ID
+        assert ds.name == "Sales"
+        assert ws_id == WORKSPACE_ID
+
+
+class TestDatasetNameFromReports:
+    def test_strips_report_template_suffix(self):
+        assert _dataset_name_from_reports(["Sales - Report Template"]) == "Sales"
+
+    def test_strips_presentation_template_suffix(self):
+        assert _dataset_name_from_reports(["Sales - Presentation Template"]) == "Sales"
+
+    def test_prefers_report_template_over_presentation(self):
+        names = ["Sales - Presentation Template", "Sales - Report Template"]
+        assert _dataset_name_from_reports(names) == "Sales"
+
+    def test_fallback_to_shortest_name(self):
+        names = ["A longer report name", "Short"]
+        assert _dataset_name_from_reports(names) == "Short"
+
+    def test_single_name_no_suffix(self):
+        assert _dataset_name_from_reports(["My Dataset"]) == "My Dataset"
 
 
 class TestGetDataset:

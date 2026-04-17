@@ -214,7 +214,7 @@ class TestListDatasets:
         respx.get(f"{BASE}/reports").mock(
             return_value=Response(200, json={"value": [make_user_report_payload()]})
         )
-        respx.get(f"{BASE}/datasets/{DATASET_ID}").mock(
+        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
             return_value=Response(200, json=make_dataset_payload())
         )
 

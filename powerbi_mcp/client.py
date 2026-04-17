@@ -52,6 +52,22 @@ class PowerBIError(Exception):
         super().__init__(f"Power BI API error {status_code}: {message}")
 
 
+def _dataset_name_from_reports(report_names: list[str]) -> str:
+    """Infer a dataset name from the report names that reference it.
+
+    Power BI conventions:
+      "<DatasetName> - Report Template"       → "<DatasetName>"
+      "<DatasetName> - Presentation Template" → "<DatasetName>"
+
+    Falls back to the shortest report name when neither suffix is found.
+    """
+    for suffix in (" - Report Template", " - Presentation Template"):
+        for name in report_names:
+            if name.endswith(suffix):
+                return name[: -len(suffix)]
+    return min(report_names, key=len)
+
+
 def _raise_for_status(response: httpx.Response) -> None:
     if response.is_error:
         try:
@@ -156,32 +172,38 @@ class PowerBIClient:
 
         # Filter to reports whose dataset lives in the target workspace,
         # and that actually have a dataset_id populated.
-        seen: dict[str, str] = {}  # dataset_id → workspace_id
+        # Track report names per dataset so we can synthesize a name if the
+        # metadata fetch fails.
+        seen: dict[str, tuple[str, list[str]]] = {}  # dataset_id → (workspace_id, report_names)
         for report in user_reports:
             if not report.dataset_id or not report.dataset_workspace_id:
                 continue
             if report.dataset_workspace_id != workspace_id:
                 continue
             if report.dataset_id not in seen:
-                seen[report.dataset_id] = report.dataset_workspace_id
+                seen[report.dataset_id] = (report.dataset_workspace_id, [])
+            seen[report.dataset_id][1].append(report.name)
 
         if not seen:
             return []
 
-        async def _safe_get_dataset(
-            ds_id: str, ws_id: str
-        ) -> tuple[Dataset | None, str]:
+        async def _get_or_synthesize(
+            ds_id: str, ds_ws_id: str, report_names: list[str]
+        ) -> tuple[Dataset, str]:
             try:
-                ds = await self.get_dataset_org(ds_id)
-                return ds, ws_id
+                ds = await self.get_dataset(ds_ws_id, ds_id)
+                return ds, ds_ws_id
             except PowerBIError:
-                return None, ws_id
+                # App-Build-only users get 401/404 from the in-group endpoint.
+                # Synthesise a minimal Dataset from the report names we have.
+                ds = Dataset(id=ds_id, name=_dataset_name_from_reports(report_names))
+                return ds, ds_ws_id
 
-        dataset_results = await asyncio.gather(
-            *[_safe_get_dataset(ds_id, ws_id) for ds_id, ws_id in seen.items()]
+        results = await asyncio.gather(
+            *[_get_or_synthesize(ds_id, ws_id, names) for ds_id, (ws_id, names) in seen.items()]
         )
 
-        return [(ds, ws_id) for ds, ws_id in dataset_results if ds is not None]
+        return list(results)
 
     async def get_dataset_org(self, dataset_id: str) -> Dataset:
         """
