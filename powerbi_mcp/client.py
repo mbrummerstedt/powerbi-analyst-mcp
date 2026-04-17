@@ -1,22 +1,18 @@
 """
 Async Power BI REST API client.
 
-Dataset discovery uses the app-level reports endpoint to avoid the workspace
+Dataset discovery uses the org-level reports endpoint to avoid the workspace
 membership requirement of the direct groups/datasets endpoint:
 
-  GET /v1.0/myorg/apps/{app_id}/reports
-    → reports with datasetId (may be empty in app context — see note below)
-
-  GET /v1.0/myorg/groups/{workspace_id}/reports/{original_report_object_id}
-    → workspace-context report with the real datasetId
+  GET /v1.0/myorg/reports
+    → all user-visible reports with populated datasetId + datasetWorkspaceId
+    → filter by datasetWorkspaceId == workspace_id to scope to the right app workspace
 
   GET /v1.0/myorg/datasets/{dataset_id}
     → dataset metadata (org-level; requires only Build permission)
 
-Note on app-context datasetId: Power BI deliberately returns ``datasetId: ""``
-for reports accessed via the app endpoint.  The real link is
-``originalReportObjectId`` → workspace-context report → ``datasetId``.
-See: https://learn.microsoft.com/en-us/rest/api/power-bi/apps/get-reports
+This avoids the 2-hop path (app reports → workspace reports) that fails with
+401 for App (Build) users who have no direct workspace membership.
 
 DAX execution uses the org-level endpoint which requires only Build permission
 and works for app-granted access without direct workspace membership:
@@ -40,8 +36,8 @@ from .models import (
     Measure,
     RefreshEntry,
     Table,
+    UserReport,
     Workspace,
-    WorkspaceReport,
 )
 
 BASE_URL = "https://api.powerbi.com/v1.0/myorg"
@@ -113,27 +109,14 @@ class PowerBIClient:
             data = resp.json().get("value", [])
             return [AppReport.model_validate(r) for r in data]
 
-    async def get_workspace_report(
-        self, workspace_id: str, report_id: str
-    ) -> WorkspaceReport:
-        """
-        Return a single report in workspace context.
-
-        This is used to resolve the real ``datasetId`` for reports retrieved via
-        the app endpoint (where ``datasetId`` is always empty).
-
-        Parameters
-        ----------
-        workspace_id:
-            Workspace (group) GUID — use the ``workspaceId`` from the app report.
-        report_id:
-            The ``originalReportObjectId`` from the app-context report.
-        """
-        url = f"{BASE_URL}/groups/{workspace_id}/reports/{report_id}"
+    async def list_user_reports(self) -> list[UserReport]:
+        """Return all reports visible to the authenticated user (org-level)."""
+        url = f"{BASE_URL}/reports"
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.get(url, headers=self._headers)
             _raise_for_status(resp)
-            return WorkspaceReport.model_validate(resp.json())
+            data = resp.json().get("value", [])
+            return [UserReport.model_validate(r) for r in data]
 
     async def list_datasets(
         self, app_id: str, workspace_id: str
@@ -146,64 +129,41 @@ class PowerBIClient:
         ``list_tables``, ``list_measures``, ``execute_dax``, etc.).
 
         Discovery path (avoids the workspace-membership requirement of the
-        direct ``/groups/{ws}/datasets`` endpoint):
+        direct ``/groups/{ws}/datasets`` endpoint, and the 401 failure of the
+        2-hop app-reports → workspace-reports path for App-only users):
 
-        1. ``GET /apps/{appId}/reports``
-           → reports in the app.  ``datasetId`` is empty in app context.
-           App-context reports omit ``workspaceId`` — the app's own
-           ``workspace_id`` is used as fallback for all report lookups.
-        2. ``GET /groups/{workspaceId}/reports/{originalReportObjectId}``
-           → workspace-context report with the real ``datasetId``.
-           Resolved in parallel; failures are silently skipped.
-        3. Deduplicate by ``datasetId``.
-        4. ``GET /datasets/{datasetId}`` (org-level, Build permission only)
+        1. ``GET /myorg/reports``
+           → all user-visible reports with populated ``datasetId`` and
+           ``datasetWorkspaceId``.  Filter to those whose
+           ``datasetWorkspaceId`` matches the app's ``workspace_id``.
+        2. Deduplicate by ``datasetId``.
+        3. ``GET /datasets/{datasetId}`` (org-level, Build permission only)
            → dataset metadata, resolved in parallel.
 
         Parameters
         ----------
         app_id:
-            The ``id`` field from ``list_apps``.
+            The ``id`` field from ``list_apps``.  Not used directly in the
+            new discovery path but kept for API symmetry and future use.
         workspace_id:
             The ``workspaceId`` field from the same app in ``list_apps``.
-            An app always belongs to exactly one workspace.
+            Used to filter org-level reports to only those belonging to this
+            app's workspace.
         """
         import asyncio
 
-        app_reports = await self.list_app_reports(app_id)
+        user_reports = await self.list_user_reports()
 
-        # App-context reports omit workspaceId — use the app's workspace for all.
-        resolvable = [
-            (r.workspace_id or workspace_id, r.original_report_object_id)
-            for r in app_reports
-            if r.original_report_object_id
-        ]
-
-        if not resolvable:
-            return []
-
-        async def _safe_get_ws_report(
-            ws_id: str, rep_id: str
-        ) -> tuple[str, WorkspaceReport | None]:
-            try:
-                report = await self.get_workspace_report(ws_id, rep_id)
-                return ws_id, report
-            except PowerBIError:
-                return ws_id, None
-
-        ws_results = await asyncio.gather(
-            *[_safe_get_ws_report(ws_id, rep_id) for ws_id, rep_id in resolvable]
-        )
-
-        # Deduplicate by datasetId; track the owning workspace.
-        # For cross-workspace semantic models the dataset lives in a different
-        # workspace (datasetWorkspaceId) than the report.
+        # Filter to reports whose dataset lives in the target workspace,
+        # and that actually have a dataset_id populated.
         seen: dict[str, str] = {}  # dataset_id → workspace_id
-        for report_ws_id, ws_report in ws_results:
-            if ws_report is None or not ws_report.dataset_id:
+        for report in user_reports:
+            if not report.dataset_id or not report.dataset_workspace_id:
                 continue
-            if ws_report.dataset_id not in seen:
-                dataset_ws = ws_report.dataset_workspace_id or report_ws_id
-                seen[ws_report.dataset_id] = dataset_ws
+            if report.dataset_workspace_id != workspace_id:
+                continue
+            if report.dataset_id not in seen:
+                seen[report.dataset_id] = report.dataset_workspace_id
 
         if not seen:
             return []

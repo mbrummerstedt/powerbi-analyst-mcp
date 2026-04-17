@@ -60,6 +60,24 @@ def make_app_report_payload(
     }
 
 
+def make_user_report_payload(
+    *,
+    id: str = APP_REPORT_ID,
+    name: str = "Test Report",
+    dataset_id: str = DATASET_ID,
+    dataset_workspace_id: str = WORKSPACE_ID,
+    web_url: str = "https://app.powerbi.com/groups/me/reports/rrrrrrrr",
+) -> dict:
+    """User-context report as returned by GET /myorg/reports."""
+    return {
+        "id": id,
+        "name": name,
+        "datasetId": dataset_id,
+        "datasetWorkspaceId": dataset_workspace_id,
+        "webUrl": web_url,
+    }
+
+
 def make_workspace_report_payload(
     *,
     id: str = ORIGINAL_REPORT_ID,

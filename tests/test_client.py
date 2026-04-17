@@ -22,7 +22,6 @@ from tests.conftest import (
     APP_REPORT_ID,
     DATASET_ID,
     FAKE_TOKEN,
-    ORIGINAL_REPORT_ID,
     WORKSPACE_ID,
     make_app_payload,
     make_app_report_payload,
@@ -32,8 +31,8 @@ from tests.conftest import (
     make_measure_dax_row,
     make_refresh_entry_payload,
     make_table_dax_row,
+    make_user_report_payload,
     make_workspace_payload,
-    make_workspace_report_payload,
 )
 
 BASE = "https://api.powerbi.com/v1.0/myorg"
@@ -178,11 +177,8 @@ class TestListWorkspaces:
 class TestListDatasets:
     @respx.mock
     async def test_returns_typed_models(self, client: PowerBIClient):
-        respx.get(f"{BASE}/apps/{APP_ID}/reports").mock(
-            return_value=Response(200, json={"value": [make_app_report_payload()]})
-        )
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/reports/{ORIGINAL_REPORT_ID}").mock(
-            return_value=Response(200, json=make_workspace_report_payload())
+        respx.get(f"{BASE}/reports").mock(
+            return_value=Response(200, json={"value": [make_user_report_payload()]})
         )
         respx.get(f"{BASE}/datasets/{DATASET_ID}").mock(
             return_value=Response(200, json=make_dataset_payload())
@@ -195,8 +191,8 @@ class TestListDatasets:
         assert ws_id == WORKSPACE_ID
 
     @respx.mock
-    async def test_uses_app_reports_url(self, client: PowerBIClient):
-        route = respx.get(f"{BASE}/apps/{APP_ID}/reports").mock(
+    async def test_uses_org_level_reports_url(self, client: PowerBIClient):
+        route = respx.get(f"{BASE}/reports").mock(
             return_value=Response(200, json={"value": []})
         )
         await client.list_datasets(APP_ID, WORKSPACE_ID)
@@ -205,23 +201,35 @@ class TestListDatasets:
     @respx.mock
     async def test_deduplicates_datasets(self, client: PowerBIClient):
         """Two reports pointing to the same dataset → one dataset returned."""
-        report_a = make_app_report_payload(id="rep-a-id", original_report_object_id="orig-a")
-        report_b = make_app_report_payload(id="rep-b-id", original_report_object_id="orig-b")
-        respx.get(f"{BASE}/apps/{APP_ID}/reports").mock(
+        report_a = make_user_report_payload(id="rep-a-id")
+        report_b = make_user_report_payload(id="rep-b-id")
+        respx.get(f"{BASE}/reports").mock(
             return_value=Response(200, json={"value": [report_a, report_b]})
-        )
-        # Both workspace reports resolve to the same dataset
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/reports/orig-a").mock(
-            return_value=Response(200, json=make_workspace_report_payload(id="orig-a"))
-        )
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/reports/orig-b").mock(
-            return_value=Response(200, json=make_workspace_report_payload(id="orig-b"))
         )
         respx.get(f"{BASE}/datasets/{DATASET_ID}").mock(
             return_value=Response(200, json=make_dataset_payload())
         )
         result = await client.list_datasets(APP_ID, WORKSPACE_ID)
         assert len(result) == 1
+
+    @respx.mock
+    async def test_skips_reports_with_wrong_workspace(self, client: PowerBIClient):
+        """Reports with a different datasetWorkspaceId are filtered out."""
+        wrong_ws_report = make_user_report_payload(
+            id="rep-wrong-ws",
+            dataset_workspace_id="ffffffff-0000-0000-0000-000000000099",
+        )
+        right_ws_report = make_user_report_payload(id="rep-right-ws")
+        respx.get(f"{BASE}/reports").mock(
+            return_value=Response(200, json={"value": [wrong_ws_report, right_ws_report]})
+        )
+        respx.get(f"{BASE}/datasets/{DATASET_ID}").mock(
+            return_value=Response(200, json=make_dataset_payload())
+        )
+        result = await client.list_datasets(APP_ID, WORKSPACE_ID)
+        assert len(result) == 1
+        ds, ws_id = result[0]
+        assert ws_id == WORKSPACE_ID
 
 
 class TestGetDataset:

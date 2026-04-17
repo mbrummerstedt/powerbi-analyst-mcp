@@ -24,7 +24,6 @@ from tests.conftest import (
     APP_ID,
     DATASET_ID,
     FAKE_TOKEN,
-    ORIGINAL_REPORT_ID,
     WORKSPACE_ID,
     make_app_payload,
     make_app_report_payload,
@@ -34,8 +33,8 @@ from tests.conftest import (
     make_measure_dax_row,
     make_refresh_entry_payload,
     make_table_dax_row,
+    make_user_report_payload,
     make_workspace_payload,
-    make_workspace_report_payload,
 )
 
 BASE = "https://api.powerbi.com/v1.0/myorg"
@@ -211,13 +210,10 @@ class TestListDatasets:
         )
 
     def _mock_full_flow(self):
-        """Register respx mocks for list_apps + 3-step app→workspace→dataset resolution."""
+        """Register respx mocks for list_apps + org-level reports + dataset resolution."""
         self._mock_apps()
-        respx.get(f"{BASE}/apps/{APP_ID}/reports").mock(
-            return_value=Response(200, json={"value": [make_app_report_payload()]})
-        )
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/reports/{ORIGINAL_REPORT_ID}").mock(
-            return_value=Response(200, json=make_workspace_report_payload())
+        respx.get(f"{BASE}/reports").mock(
+            return_value=Response(200, json={"value": [make_user_report_payload()]})
         )
         respx.get(f"{BASE}/datasets/{DATASET_ID}").mock(
             return_value=Response(200, json=make_dataset_payload())
@@ -236,7 +232,7 @@ class TestListDatasets:
     @respx.mock
     async def test_empty_returns_human_message(self, mcp_with_tools: FastMCP):
         self._mock_apps()
-        respx.get(f"{BASE}/apps/{APP_ID}/reports").mock(
+        respx.get(f"{BASE}/reports").mock(
             return_value=Response(200, json={"value": []})
         )
         result = await call(mcp_with_tools, "list_datasets", app_id=APP_ID)
@@ -245,7 +241,7 @@ class TestListDatasets:
     @respx.mock
     async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
         self._mock_apps()
-        respx.get(f"{BASE}/apps/{APP_ID}/reports").mock(
+        respx.get(f"{BASE}/reports").mock(
             return_value=Response(500, json={"error": {"message": "Server Error"}})
         )
         result = await call(mcp_with_tools, "list_datasets", app_id=APP_ID)

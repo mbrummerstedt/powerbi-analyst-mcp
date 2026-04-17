@@ -65,6 +65,18 @@ class WorkspaceReport(BaseModel):
     web_url: Optional[str] = Field(None, alias="webUrl")
 
 
+class UserReport(BaseModel):
+    """A report returned from the org-level /myorg/reports endpoint."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    name: str
+    dataset_id: Optional[str] = Field(None, alias="datasetId")
+    dataset_workspace_id: Optional[str] = Field(None, alias="datasetWorkspaceId")
+    web_url: Optional[str] = Field(None, alias="webUrl")
+
+
 class Workspace(BaseModel):
     """A Power BI workspace (group)."""
 
