@@ -26,7 +26,6 @@ from tests.conftest import (
     FAKE_TOKEN,
     WORKSPACE_ID,
     make_app_payload,
-    make_app_report_payload,
     make_column_dax_row,
     make_dataset_payload,
     make_dax_response,

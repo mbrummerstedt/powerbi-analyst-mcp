@@ -45,26 +45,6 @@ class AppReport(BaseModel):
     web_url: Optional[str] = Field(None, alias="webUrl")
 
 
-class WorkspaceReport(BaseModel):
-    """
-    A report in workspace context.
-
-    Returned by /groups/{workspaceId}/reports/{reportId}.
-    This is the only reliable source of the real ``datasetId`` when the
-    app-context report returns an empty ``datasetId``.
-    """
-
-    model_config = ConfigDict(populate_by_name=True)
-
-    id: str
-    name: str
-    dataset_id: Optional[str] = Field(None, alias="datasetId")
-    # Populated for cross-workspace semantic models; equals the report's
-    # workspace when the dataset lives in the same workspace as the report.
-    dataset_workspace_id: Optional[str] = Field(None, alias="datasetWorkspaceId")
-    web_url: Optional[str] = Field(None, alias="webUrl")
-
-
 class UserReport(BaseModel):
     """A report returned from the org-level /myorg/reports endpoint."""
 

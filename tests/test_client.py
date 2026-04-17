@@ -24,7 +24,6 @@ from tests.conftest import (
     FAKE_TOKEN,
     WORKSPACE_ID,
     make_app_payload,
-    make_app_report_payload,
     make_column_dax_row,
     make_dataset_payload,
     make_dax_response,
@@ -230,6 +229,21 @@ class TestListDatasets:
         assert len(result) == 1
         ds, ws_id = result[0]
         assert ws_id == WORKSPACE_ID
+
+    @respx.mock
+    async def test_skips_reports_with_missing_dataset_fields(self, client: PowerBIClient):
+        """Reports with empty datasetId or missing datasetWorkspaceId are skipped."""
+        valid = make_user_report_payload()
+        no_dataset_id = make_user_report_payload(id="r2", dataset_id="")
+        no_workspace_id = make_user_report_payload(id="r3", dataset_workspace_id=None)
+        respx.get(f"{BASE}/reports").mock(
+            return_value=Response(200, json={"value": [valid, no_dataset_id, no_workspace_id]})
+        )
+        respx.get(f"{BASE}/datasets/{DATASET_ID}").mock(
+            return_value=Response(200, json=make_dataset_payload())
+        )
+        result = await client.list_datasets(APP_ID, WORKSPACE_ID)
+        assert len(result) == 1
 
 
 class TestGetDataset:
