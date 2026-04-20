@@ -120,27 +120,6 @@ class TestLiveListDatasets:
 
 
 # ---------------------------------------------------------------------------
-# Dataset info
-# ---------------------------------------------------------------------------
-
-
-class TestLiveGetDatasetInfo:
-    async def test_response_has_expected_fields(self, live_client: PowerBIClient):
-        apps = await live_client.list_apps()
-        for app in apps:
-            results = await live_client.list_datasets(app.id, app.workspace_id)
-            if results:
-                ds, ws_id = results[0]
-                info = await live_client.get_dataset(ws_id, ds.id)
-                assert info.id == ds.id
-                assert info.name == ds.name
-                history = await live_client.get_dataset_refresh_history(ws_id, ds.id, top=5)
-                assert isinstance(history, list)
-                return
-        pytest.skip("No datasets found")
-
-
-# ---------------------------------------------------------------------------
 # DAX execution — universal smoke test
 # ---------------------------------------------------------------------------
 

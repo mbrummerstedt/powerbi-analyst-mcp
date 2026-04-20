@@ -251,54 +251,6 @@ def register_tools(
         return _fmt_json(summary)
 
     @mcp.tool()
-    async def get_dataset_info(
-        workspace_id: Annotated[
-            str, "GUID of the workspace that contains the dataset (from list_apps workspaceId)."
-        ],
-        dataset_id: Annotated[str, "GUID of the dataset to inspect."],
-    ) -> str:
-        """
-        Return detailed metadata for a single Power BI dataset.
-
-        Includes name, owner, refresh schedule, storage mode, web URL, and more.
-        Also returns the last 5 refresh history entries so you can see data freshness.
-        """
-        client = _get_client()
-        try:
-            info = await client.get_dataset(workspace_id, dataset_id)
-            history = await client.get_dataset_refresh_history(
-                workspace_id, dataset_id, top=5
-            )
-        except PowerBIError as exc:
-            return f"Error retrieving dataset info: {exc}"
-
-        output = {
-            "dataset": {
-                "id": info.id,
-                "name": info.name,
-                "description": info.description,
-                "configuredBy": info.configured_by,
-                "targetStorageMode": info.target_storage_mode,
-                "isRefreshable": info.is_refreshable,
-                "isEffectiveIdentityRequired": info.is_effective_identity_required,
-                "isOnPremGatewayRequired": info.is_on_prem_gateway_required,
-                "createdDate": info.created_date,
-                "webUrl": info.web_url,
-            },
-            "recentRefreshes": [
-                {
-                    "requestId": r.request_id,
-                    "status": r.status,
-                    "startTime": r.start_time,
-                    "endTime": r.end_time,
-                    "refreshType": r.refresh_type,
-                }
-                for r in history
-            ],
-        }
-        return _fmt_json(output)
-
-    @mcp.tool()
     async def list_tables(
         workspace_id: Annotated[
             str, "GUID of the workspace that contains the dataset (from list_apps workspaceId)."

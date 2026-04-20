@@ -248,46 +248,6 @@ class TestListDatasets:
 
 
 # ---------------------------------------------------------------------------
-# get_dataset_info
-# ---------------------------------------------------------------------------
-
-
-class TestGetDatasetInfo:
-    @respx.mock
-    async def test_returns_dataset_and_refreshes_keys(self, mcp_with_tools: FastMCP):
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
-            return_value=Response(200, json=make_dataset_payload())
-        )
-        respx.get(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/refreshes",
-        ).mock(
-            return_value=Response(200, json={"value": [make_refresh_entry_payload()]})
-        )
-        result = await call(
-            mcp_with_tools, "get_dataset_info",
-            workspace_id=WORKSPACE_ID,
-            dataset_id=DATASET_ID,
-        )
-        data = json.loads(result)
-        assert "dataset" in data
-        assert "recentRefreshes" in data
-        assert data["dataset"]["name"] == "Test Dataset"
-        assert len(data["recentRefreshes"]) == 1
-
-    @respx.mock
-    async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
-            return_value=Response(404, json={"error": {"message": "Not found"}})
-        )
-        result = await call(
-            mcp_with_tools, "get_dataset_info",
-            workspace_id=WORKSPACE_ID,
-            dataset_id=DATASET_ID,
-        )
-        assert "Error retrieving dataset info" in result
-
-
-# ---------------------------------------------------------------------------
 # list_tables
 # ---------------------------------------------------------------------------
 
