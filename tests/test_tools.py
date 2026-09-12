@@ -1,7 +1,7 @@
 """
 Tests for MCP tool functions in powerbi_mcp/tools.py.
 
-Tools are registered on a real FastMCP instance and called via mcp.call_tool().
+Tools are registered on a real MCPServer instance and called via mcp.call_tool().
 HTTP is intercepted by respx; PowerBIAuth.get_token_silent is patched to return
 a fake token, so no real MSAL flows occur.
 """
@@ -17,7 +17,7 @@ from unittest.mock import patch
 import pytest
 import respx
 from httpx import Response
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from powerbi_mcp.tools import INLINE_ROW_LIMIT, register_tools
 from tests.conftest import (
@@ -40,8 +40,8 @@ BASE = "https://api.powerbi.com/v1.0/myorg"
 
 @pytest.fixture
 def mcp_with_tools(tmp_path: Path):
-    """Create a FastMCP instance with all Power BI tools registered."""
-    mcp = FastMCP("Power BI Test")
+    """Create a MCPServer instance with all Power BI tools registered."""
+    mcp = MCPServer("Power BI Test")
     with patch(
         "powerbi_mcp.auth.PowerBIAuth.get_token_silent",
         return_value=FAKE_TOKEN,
@@ -50,10 +50,10 @@ def mcp_with_tools(tmp_path: Path):
         yield mcp
 
 
-async def call(mcp: FastMCP, tool_name: str, **kwargs) -> str:
+async def call(mcp: MCPServer, tool_name: str, **kwargs) -> str:
     """Invoke a tool and return its text response."""
-    contents, _ = await mcp.call_tool(tool_name, kwargs)
-    return contents[0].text
+    result = await mcp.call_tool(tool_name, kwargs)
+    return result.content[0].text
 
 
 # ---------------------------------------------------------------------------
@@ -69,13 +69,13 @@ FAKE_FLOW = {
 
 
 class TestAuthenticate:
-    async def test_already_authenticated_short_circuits(self, mcp_with_tools: FastMCP):
+    async def test_already_authenticated_short_circuits(self, mcp_with_tools: MCPServer):
         result = await call(mcp_with_tools, "authenticate")
         assert "Already authenticated" in result
 
     async def test_phase1_no_token_returns_url_and_code(self):
         """Phase 1: no token → returns URL + code, instructs user to call again."""
-        mcp = FastMCP("Power BI Test")
+        mcp = MCPServer("Power BI Test")
         with patch("powerbi_mcp.auth.PowerBIAuth.get_token_silent", return_value=None), \
              patch("msal.PublicClientApplication.initiate_device_flow", return_value=FAKE_FLOW):
             register_tools(mcp, "fake-client-id")
@@ -86,7 +86,7 @@ class TestAuthenticate:
 
     async def test_phase2_success_clears_pending_flow(self):
         """Phase 2: pending flow + successful token acquisition → success message."""
-        mcp = FastMCP("Power BI Test")
+        mcp = MCPServer("Power BI Test")
         with patch("powerbi_mcp.auth.PowerBIAuth.get_token_silent", return_value=None), \
              patch("msal.PublicClientApplication.initiate_device_flow", return_value=FAKE_FLOW), \
              patch(
@@ -100,7 +100,7 @@ class TestAuthenticate:
 
     async def test_phase2_authorization_pending_instructs_retry(self):
         """Phase 2: user hasn't finished signing in → friendly wait message."""
-        mcp = FastMCP("Power BI Test")
+        mcp = MCPServer("Power BI Test")
         with patch("powerbi_mcp.auth.PowerBIAuth.get_token_silent", return_value=None), \
              patch("msal.PublicClientApplication.initiate_device_flow", return_value=FAKE_FLOW), \
              patch(
@@ -115,7 +115,7 @@ class TestAuthenticate:
 
     async def test_phase2_flow_failure_clears_pending_and_instructs_restart(self):
         """Phase 2: expired or rejected flow → clears pending flow, tells user to restart."""
-        mcp = FastMCP("Power BI Test")
+        mcp = MCPServer("Power BI Test")
         with patch("powerbi_mcp.auth.PowerBIAuth.get_token_silent", return_value=None), \
              patch("msal.PublicClientApplication.initiate_device_flow", return_value=FAKE_FLOW), \
              patch(
@@ -135,7 +135,7 @@ class TestAuthenticate:
 
 
 class TestLogout:
-    async def test_clears_cache_and_returns_confirmation(self, mcp_with_tools: FastMCP):
+    async def test_clears_cache_and_returns_confirmation(self, mcp_with_tools: MCPServer):
         with patch("powerbi_mcp.auth.PowerBIAuth.clear_cache") as mock_clear:
             result = await call(mcp_with_tools, "logout")
         mock_clear.assert_called_once()
@@ -143,7 +143,7 @@ class TestLogout:
 
     async def test_clears_pending_flow(self):
         """logout should discard any in-progress device flow."""
-        mcp = FastMCP("Power BI Test")
+        mcp = MCPServer("Power BI Test")
         with patch("powerbi_mcp.auth.PowerBIAuth.get_token_silent", return_value=None), \
              patch("msal.PublicClientApplication.initiate_device_flow", return_value=FAKE_FLOW), \
              patch("powerbi_mcp.auth.PowerBIAuth.clear_cache"):
@@ -166,7 +166,7 @@ class TestLogout:
 
 class TestListApps:
     @respx.mock
-    async def test_happy_path_returns_json_with_workspace_id(self, mcp_with_tools: FastMCP):
+    async def test_happy_path_returns_json_with_workspace_id(self, mcp_with_tools: MCPServer):
         """list_apps must return workspaceId — it is the entry point for all dataset access."""
         respx.get(f"{BASE}/apps").mock(
             return_value=Response(200, json={"value": [make_app_payload()]})
@@ -179,7 +179,7 @@ class TestListApps:
         assert data[0]["workspaceId"] == WORKSPACE_ID
 
     @respx.mock
-    async def test_empty_list_returns_no_apps_message(self, mcp_with_tools: FastMCP):
+    async def test_empty_list_returns_no_apps_message(self, mcp_with_tools: MCPServer):
         respx.get(f"{BASE}/apps").mock(
             return_value=Response(200, json={"value": []})
         )
@@ -187,7 +187,7 @@ class TestListApps:
         assert "No installed apps" in result
 
     @respx.mock
-    async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
+    async def test_api_error_returns_error_string(self, mcp_with_tools: MCPServer):
         respx.get(f"{BASE}/apps").mock(
             return_value=Response(403, json={"error": {"message": "Forbidden"}})
         )
@@ -202,7 +202,7 @@ class TestListApps:
 
 class TestListDatasets:
     @respx.mock
-    async def test_happy_path_returns_json(self, mcp_with_tools: FastMCP):
+    async def test_happy_path_returns_json(self, mcp_with_tools: MCPServer):
         respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets").mock(
             return_value=Response(200, json={"value": [make_dataset_payload()]})
         )
@@ -213,7 +213,7 @@ class TestListDatasets:
         assert data[0]["name"] == "Test Dataset"
 
     @respx.mock
-    async def test_empty_returns_human_message(self, mcp_with_tools: FastMCP):
+    async def test_empty_returns_human_message(self, mcp_with_tools: MCPServer):
         respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets").mock(
             return_value=Response(200, json={"value": []})
         )
@@ -221,7 +221,7 @@ class TestListDatasets:
         assert "No datasets found" in result
 
     @respx.mock
-    async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
+    async def test_api_error_returns_error_string(self, mcp_with_tools: MCPServer):
         respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets").mock(
             return_value=Response(500, json={"error": {"message": "Server Error"}})
         )
@@ -236,7 +236,7 @@ class TestListDatasets:
 
 class TestGetDatasetInfo:
     @respx.mock
-    async def test_returns_dataset_and_refreshes_keys(self, mcp_with_tools: FastMCP):
+    async def test_returns_dataset_and_refreshes_keys(self, mcp_with_tools: MCPServer):
         respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
             return_value=Response(200, json=make_dataset_payload())
         )
@@ -257,7 +257,7 @@ class TestGetDatasetInfo:
         assert len(data["recentRefreshes"]) == 1
 
     @respx.mock
-    async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
+    async def test_api_error_returns_error_string(self, mcp_with_tools: MCPServer):
         respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
             return_value=Response(404, json={"error": {"message": "Not found"}})
         )
@@ -276,7 +276,7 @@ class TestGetDatasetInfo:
 
 class TestListTables:
     @respx.mock
-    async def test_happy_path_returns_json(self, mcp_with_tools: FastMCP):
+    async def test_happy_path_returns_json(self, mcp_with_tools: MCPServer):
         row = make_table_dax_row("Sales")
         bracketed = {f"[{k}]": v for k, v in row.items()}
         respx.post(
@@ -291,7 +291,7 @@ class TestListTables:
         assert data[0]["name"] == "Sales"
 
     @respx.mock
-    async def test_empty_returns_human_message(self, mcp_with_tools: FastMCP):
+    async def test_empty_returns_human_message(self, mcp_with_tools: MCPServer):
         respx.post(
             f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
@@ -303,7 +303,7 @@ class TestListTables:
         assert "No visible tables" in result
 
     @respx.mock
-    async def test_api_error_includes_xmla_hint(self, mcp_with_tools: FastMCP):
+    async def test_api_error_includes_xmla_hint(self, mcp_with_tools: MCPServer):
         respx.post(
             f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(
@@ -325,7 +325,7 @@ class TestListTables:
 
 class TestListMeasures:
     @respx.mock
-    async def test_returns_all_measures(self, mcp_with_tools: FastMCP):
+    async def test_returns_all_measures(self, mcp_with_tools: MCPServer):
         row = make_measure_dax_row()
         bracketed = {f"[{k}]": v for k, v in row.items()}
         respx.post(
@@ -341,7 +341,7 @@ class TestListMeasures:
         assert data[0]["tableName"] == "Sales"
 
     @respx.mock
-    async def test_empty_without_filter_returns_no_filter_note(self, mcp_with_tools: FastMCP):
+    async def test_empty_without_filter_returns_no_filter_note(self, mcp_with_tools: MCPServer):
         respx.post(
             f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
@@ -354,7 +354,7 @@ class TestListMeasures:
         assert "in table" not in result
 
     @respx.mock
-    async def test_empty_with_filter_includes_table_note(self, mcp_with_tools: FastMCP):
+    async def test_empty_with_filter_includes_table_note(self, mcp_with_tools: MCPServer):
         respx.post(
             f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
@@ -375,7 +375,7 @@ class TestListMeasures:
 
 class TestListColumns:
     @respx.mock
-    async def test_returns_all_columns(self, mcp_with_tools: FastMCP):
+    async def test_returns_all_columns(self, mcp_with_tools: MCPServer):
         row = make_column_dax_row()
         bracketed = {f"[{k}]": v for k, v in row.items()}
         respx.post(
@@ -391,7 +391,7 @@ class TestListColumns:
         assert data[0]["tableName"] == "Products"
 
     @respx.mock
-    async def test_empty_with_table_filter_includes_note(self, mcp_with_tools: FastMCP):
+    async def test_empty_with_table_filter_includes_note(self, mcp_with_tools: MCPServer):
         respx.post(
             f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
@@ -405,7 +405,7 @@ class TestListColumns:
         assert "Products" in result
 
     @respx.mock
-    async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
+    async def test_api_error_returns_error_string(self, mcp_with_tools: MCPServer):
         respx.post(
             f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(500, json={"error": {"message": "Server error"}}))
@@ -424,7 +424,7 @@ class TestListColumns:
 
 class TestExecuteDax:
     @respx.mock
-    async def test_returns_row_count_and_rows(self, mcp_with_tools: FastMCP):
+    async def test_returns_row_count_and_rows(self, mcp_with_tools: MCPServer):
         respx.post(
             f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(
@@ -444,7 +444,7 @@ class TestExecuteDax:
         assert len(data["rows"]) == 2
 
     @respx.mock
-    async def test_zero_rows_returns_specific_message(self, mcp_with_tools: FastMCP):
+    async def test_zero_rows_returns_specific_message(self, mcp_with_tools: MCPServer):
         respx.post(
             f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(return_value=Response(200, json=make_dax_response([])))
@@ -457,7 +457,7 @@ class TestExecuteDax:
         assert "returned no rows" in result
 
     @respx.mock
-    async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
+    async def test_api_error_returns_error_string(self, mcp_with_tools: MCPServer):
         respx.post(
             f"{BASE}/datasets/{DATASET_ID}/executeQueries"
         ).mock(
@@ -473,7 +473,7 @@ class TestExecuteDax:
 
     @respx.mock
     async def test_large_result_saves_csv_and_returns_summary(
-        self, mcp_with_tools: FastMCP
+        self, mcp_with_tools: MCPServer
     ):
         """Results > INLINE_ROW_LIMIT should be saved to CSV; tool returns summary."""
         large_rows = [{"[x]": i} for i in range(INLINE_ROW_LIMIT + 1)]
@@ -496,7 +496,7 @@ class TestExecuteDax:
         assert Path(data["savedTo"]).exists()
 
     @respx.mock
-    async def test_result_name_used_in_csv_filename(self, mcp_with_tools: FastMCP):
+    async def test_result_name_used_in_csv_filename(self, mcp_with_tools: MCPServer):
         """result_name parameter should appear in the saved CSV filename."""
         large_rows = [{"[x]": i} for i in range(INLINE_ROW_LIMIT + 1)]
         respx.post(
@@ -515,7 +515,7 @@ class TestExecuteDax:
         assert "monthly_revenue_2024" in Path(data["savedTo"]).name
 
     @respx.mock
-    async def test_small_result_returned_inline(self, mcp_with_tools: FastMCP):
+    async def test_small_result_returned_inline(self, mcp_with_tools: MCPServer):
         """Results <= INLINE_ROW_LIMIT should be returned inline without savedTo."""
         small_rows = [{"[x]": i} for i in range(INLINE_ROW_LIMIT)]
         respx.post(
@@ -534,7 +534,7 @@ class TestExecuteDax:
         assert "savedTo" not in data
 
     @respx.mock
-    async def test_max_rows_wraps_query_in_topn(self, mcp_with_tools: FastMCP):
+    async def test_max_rows_wraps_query_in_topn(self, mcp_with_tools: MCPServer):
         """max_rows parameter should result in a TOPN-wrapped query being sent."""
         captured: list[str] = []
 
@@ -574,7 +574,7 @@ def _make_csv(path: Path, n_rows: int) -> Path:
 
 
 class TestReadQueryResult:
-    async def test_first_page(self, mcp_with_tools: FastMCP, tmp_path: Path):
+    async def test_first_page(self, mcp_with_tools: MCPServer, tmp_path: Path):
         csv_file = _make_csv(tmp_path / "result.csv", 200)
         result = await call(
             mcp_with_tools, "read_query_result",
@@ -588,7 +588,7 @@ class TestReadQueryResult:
         assert data["hasMore"] is True
         assert data["offset"] == 0
 
-    async def test_last_page_has_more_false(self, mcp_with_tools: FastMCP, tmp_path: Path):
+    async def test_last_page_has_more_false(self, mcp_with_tools: MCPServer, tmp_path: Path):
         csv_file = _make_csv(tmp_path / "result.csv", 10)
         result = await call(
             mcp_with_tools, "read_query_result",
@@ -601,7 +601,7 @@ class TestReadQueryResult:
         assert data["hasMore"] is False
 
     async def test_file_not_found_returns_friendly_message(
-        self, mcp_with_tools: FastMCP, tmp_path: Path
+        self, mcp_with_tools: MCPServer, tmp_path: Path
     ):
         result = await call(
             mcp_with_tools, "read_query_result",
@@ -609,7 +609,7 @@ class TestReadQueryResult:
         )
         assert "File not found" in result
 
-    async def test_default_limit_is_100(self, mcp_with_tools: FastMCP, tmp_path: Path):
+    async def test_default_limit_is_100(self, mcp_with_tools: MCPServer, tmp_path: Path):
         csv_file = _make_csv(tmp_path / "result.csv", 300)
         result = await call(
             mcp_with_tools, "read_query_result",
@@ -626,7 +626,7 @@ class TestReadQueryResult:
 
 class TestExecuteDaxHistoryLogging:
     @respx.mock
-    async def test_inline_result_includes_history_entry_id(self, mcp_with_tools: FastMCP):
+    async def test_inline_result_includes_history_entry_id(self, mcp_with_tools: MCPServer):
         """Small results should still log to history and include the entry ID."""
         respx.post(
             f"{BASE}/datasets/{DATASET_ID}/executeQueries"
@@ -644,7 +644,7 @@ class TestExecuteDaxHistoryLogging:
         assert len(data["historyEntryId"]) == 36  # UUID4
 
     @respx.mock
-    async def test_large_result_includes_history_entry_id(self, mcp_with_tools: FastMCP):
+    async def test_large_result_includes_history_entry_id(self, mcp_with_tools: MCPServer):
         """Large CSV results should also log to history and include the entry ID."""
         large_rows = [{"[x]": i} for i in range(INLINE_ROW_LIMIT + 1)]
         respx.post(
@@ -670,7 +670,7 @@ class TestExecuteDaxHistoryLogging:
 
 class TestSearchQueryHistory:
     @respx.mock
-    async def test_returns_logged_queries(self, mcp_with_tools: FastMCP):
+    async def test_returns_logged_queries(self, mcp_with_tools: MCPServer):
         """After execute_dax, search_query_history should find the entry."""
         respx.post(
             f"{BASE}/datasets/{DATASET_ID}/executeQueries"
@@ -692,7 +692,7 @@ class TestSearchQueryHistory:
         assert data["matchCount"] >= 1
         assert any("Sales totals" in e.get("query_summary", "") for e in data["entries"])
 
-    async def test_empty_history_returns_message(self, mcp_with_tools: FastMCP):
+    async def test_empty_history_returns_message(self, mcp_with_tools: MCPServer):
         result = await call(mcp_with_tools, "search_query_history")
         assert "No matching queries" in result
 
@@ -704,7 +704,7 @@ class TestSearchQueryHistory:
 
 class TestDeleteQueryLogEntryTool:
     @respx.mock
-    async def test_deletes_entry_and_confirms(self, mcp_with_tools: FastMCP):
+    async def test_deletes_entry_and_confirms(self, mcp_with_tools: MCPServer):
         """Execute a query, then delete the log entry by ID."""
         respx.post(
             f"{BASE}/datasets/{DATASET_ID}/executeQueries"
@@ -728,7 +728,7 @@ class TestDeleteQueryLogEntryTool:
         search_result = await call(mcp_with_tools, "search_query_history")
         assert "No matching queries" in search_result
 
-    async def test_missing_id_returns_not_found(self, mcp_with_tools: FastMCP):
+    async def test_missing_id_returns_not_found(self, mcp_with_tools: MCPServer):
         result = await call(
             mcp_with_tools, "delete_query_log_entry",
             entry_id="nonexistent-uuid",

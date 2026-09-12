@@ -1,7 +1,7 @@
 """
 Power BI MCP Server — application factory and entry point.
 
-Loads settings, creates the FastMCP instance, and registers all tools.
+Loads settings, creates the MCPServer instance, and registers all tools.
 """
 
 from __future__ import annotations
@@ -9,7 +9,7 @@ from __future__ import annotations
 import sys
 import textwrap
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 from pydantic import ValidationError
 
 from .config import Settings
@@ -25,7 +25,7 @@ except ValidationError:
     )
     sys.exit(1)
 
-mcp = FastMCP(
+mcp = MCPServer(
     "Power BI",
     instructions=textwrap.dedent(
         """

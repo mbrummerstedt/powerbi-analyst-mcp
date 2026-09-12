@@ -17,7 +17,7 @@ from __future__ import annotations
 import json
 from typing import Annotated
 
-from mcp.server.fastmcp import FastMCP
+from mcp.server.mcpserver import MCPServer
 
 from .auth import PowerBIAuth
 from .client import PowerBIClient, PowerBIError
@@ -33,7 +33,7 @@ INLINE_ROW_LIMIT = 50
 
 
 def register_tools(
-    mcp: FastMCP,
+    mcp: MCPServer,
     client_id: str,
     tenant_id: str = "organizations",
     output_dir: str = "powerbi_output",
@@ -44,7 +44,7 @@ def register_tools(
     Parameters
     ----------
     mcp:
-        The FastMCP server instance.
+        The MCPServer instance.
     client_id:
         Azure AD application (client) ID for authentication.
     tenant_id:

@@ -14,7 +14,7 @@ powerbi-analyst-mcp/
 ├── powerbi_mcp/
 │   ├── __init__.py
 │   ├── __main__.py             # Enables: python -m powerbi_mcp
-│   ├── app.py                  # FastMCP instance, settings, main() entry point
+│   ├── app.py                  # MCPServer instance, settings, main() entry point
 │   ├── config.py               # Pydantic BaseSettings (POWERBI_CLIENT_ID, POWERBI_TENANT_ID, POWERBI_OUTPUT_DIR)
 │   ├── auth.py                 # MSAL device code flow + OS-native secure token cache
 │   ├── client.py               # Async httpx wrapper around the Power BI REST API
@@ -88,7 +88,7 @@ The integration tests call the real Power BI REST API and skip automatically if 
 ```
 powerbi_mcp/app.py
   └── Settings (pydantic-settings)   ← reads POWERBI_CLIENT_ID / POWERBI_TENANT_ID / POWERBI_OUTPUT_DIR
-  └── FastMCP instance
+  └── MCPServer instance
   └── register_tools(mcp, client_id, tenant_id, output_dir)
         └── PowerBIAuth               ← MSAL PublicClientApplication + PersistedTokenCache
         └── @mcp.tool() functions
