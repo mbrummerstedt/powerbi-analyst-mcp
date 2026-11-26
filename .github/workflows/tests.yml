@@ -12,11 +12,15 @@ jobs:
         include:
           - os: ubuntu-latest
             python: "3.12"
+          - os: ubuntu-latest
+            python: "3.15"
           - os: windows-latest
             python: "3.10"
     runs-on: ${{ matrix.os }}
     steps:
-      - uses: actions/checkout@v5
-      - uses: astral-sh/setup-uv@v7
+      - uses: actions/checkout@3d3c42e5aac5ba805825da76410c181273ba90b1 # v7.0.1
+      - uses: astral-sh/setup-uv@1db35dd8eee11c5894872e0b383ae6c406cf738d # v10.4.0
+        with:
+          version: "0.13.10"
       - name: Run offline tests
         run: uv run --python ${{ matrix.python }} --locked --extra dev python -m pytest tests/ -v --tb=short

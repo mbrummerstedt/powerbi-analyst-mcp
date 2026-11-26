@@ -15,6 +15,7 @@ if [[ ! -f "$REPO_ROOT/.env" ]]; then
   exit 1
 fi
 
+uv lock --check --project "$REPO_ROOT"
 uv run --no-project --python "$(cat "$BUNDLE_DIR/.python-version")" --env-file "$REPO_ROOT/.env" python - "$BUNDLE_DIR" <<'PYTHON'
 import zipfile, pathlib, json, sys, re, os, tempfile, tomllib
 
@@ -25,10 +26,20 @@ if not manifest_path.exists():
     sys.exit("Copy bundle/manifest.template.json to bundle/manifest.json before building.")
 manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
 with (bundle / "pyproject.toml").open("rb") as project:
-    manifest["version"] = tomllib.load(project)["project"]["version"]
+    bundle_project = tomllib.load(project)["project"]
+manifest["version"] = bundle_project["version"]
+with (repo / "pyproject.toml").open("rb") as project:
+    package = tomllib.load(project)["project"]
+if set(bundle_project["dependencies"]) != set(package["dependencies"]):
+    sys.exit("Bundle dependencies differ from the package dependencies.")
 for key in ("POWERBI_CLIENT_ID", "POWERBI_TENANT_ID"):
     if not os.environ.get(key):
         sys.exit(f"{key} missing from environment")
+
+# Existing private manifests may predate the lockfile.
+args = manifest["server"]["mcp_config"]["args"]
+if args[:1] == ["run"] and "--locked" not in args:
+    args.insert(1, "--locked")
 
 # Inject credentials from environment into env block
 env_block = manifest["server"]["mcp_config"].setdefault("env", {})
@@ -41,10 +52,16 @@ if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
 out      = repo / "dist" / f"{name}.mcpb"
 out.parent.mkdir(parents=True, exist_ok=True)
 
-config_files = ["pyproject.toml", ".python-version"]
-missing = [f for f in config_files if not (bundle / f).exists()]
+config_files = [
+    bundle / ".python-version",
+    repo / "pyproject.toml",
+    repo / "uv.lock",
+    repo / "LICENSE",
+    repo / "README.md",
+]
+missing = [str(f) for f in config_files if not f.is_file()]
 if missing:
-    sys.exit(f"Missing bundle/ files: {missing}")
+    sys.exit(f"Missing bundle inputs: {missing}")
 
 # --- Validate manifest tools match registered tools in code ---
 tools_py = (repo / "powerbi_mcp" / "tools.py").read_text()
@@ -71,7 +88,7 @@ with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
         with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as z:
             z.writestr("manifest.json", json.dumps(manifest, indent=2))
             for f in config_files:
-                z.write(bundle / f, f)
+                z.write(f, f.name)
             for p in sorted((repo / "powerbi_mcp").glob("*.py")):
                 if p.is_symlink():
                     sys.exit(f"Refusing symlink in bundle: {p.name}")

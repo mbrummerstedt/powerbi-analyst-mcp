@@ -198,7 +198,7 @@ Then replace the `uvx` command block with:
 
 #### Claude Desktop bundle (.mcpb) — for organisation-wide distribution
 
-A `.mcpb` (MCP Bundle) is a ZIP archive that Claude Desktop installs via drag-and-drop — no manual config editing required. The bundle auto-installs all Python dependencies on first run; the only prerequisite is Python 3.10+.
+A `.mcpb` (MCP Bundle) is a ZIP archive that Claude Desktop installs via drag-and-drop — no manual config editing required. The bundle uses uv to install the Python runtime and locked dependencies on first run. The configured command requires uv on the Claude Desktop PATH.
 
 Two manifests live in [`bundle/`](bundle/):
 
@@ -214,24 +214,13 @@ Two manifests live in [`bundle/`](bundle/):
 cp bundle/manifest.template.json bundle/manifest.json
 ```
 
-Edit `bundle/manifest.json` and set your values in `mcp_config.env`:
-
-```json
-"env": {
-  "POWERBI_CLIENT_ID": "your-application-client-id",
-  "POWERBI_TENANT_ID": "your-directory-tenant-id",
-  "POWERBI_OUTPUT_DIR": "/custom/output/path"
-}
-```
-
-`POWERBI_OUTPUT_DIR` is optional — omit it entirely to use the default `~/powerbi_output`.
+Set `POWERBI_CLIENT_ID` and `POWERBI_TENANT_ID` in the repository’s ignored `.env` file. The build script reads these values into the archive. To set a custom output directory, edit `server.mcp_config.env.POWERBI_OUTPUT_DIR` in the private manifest.
 
 ```bash
-# 2. Build the bundle
-chmod +x bundle/build.sh
-./bundle/build.sh
-# → dist/miinto-powerbi-analyst.mcpb  (gitignored)
+bash bundle/build.sh
 ```
+
+The archive is written to `dist/<manifest-name>.mcpb`. It contains the same dependency lockfile used by CI and Docker.
 
 **Distributing:** Share `dist/*.mcpb` with colleagues. They drag-and-drop it onto **Claude Desktop → Settings → Developer**. Works on macOS and Windows.
 

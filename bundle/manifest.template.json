@@ -44,6 +44,7 @@
       "command": "uv",
       "args": [
         "run",
+        "--locked",
         "--directory",
         "${__dirname}",
         "-m",

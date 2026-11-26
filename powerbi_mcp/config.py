@@ -36,5 +36,6 @@ class Settings(BaseSettings):
         env_file=".env",
         env_prefix="POWERBI_",
         env_ignore_empty=True,
+        extra="ignore",
         case_sensitive=False,
     )

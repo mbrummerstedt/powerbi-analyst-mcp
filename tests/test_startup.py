@@ -9,11 +9,13 @@ from mcp.client.stdio import stdio_client
 async def test_packaged_server_advertises_the_bundle_tools(tmp_path):
     manifest = Path(__file__).resolve().parents[1] / "bundle" / "manifest.template.json"
     expected = {tool["name"] for tool in json.loads(manifest.read_text(encoding="utf-8"))["tools"]}
+    (tmp_path / ".env").write_text(
+        "POWERBI_CLIENT_ID=startup-test\nUNRELATED_SETTING=example\n", encoding="utf-8"
+    )
     server = StdioServerParameters(
         command=sys.executable,
         args=["-m", "powerbi_mcp"],
         cwd=tmp_path,
-        env={"POWERBI_CLIENT_ID": "startup-test"},
     )
     async with stdio_client(server) as streams, ClientSession(*streams) as session:
         await session.initialize()
