@@ -1,0 +1,8 @@
+*
+!LICENSE
+!README.md
+!uv.lock
+!pyproject.toml
+!powerbi_mcp/
+powerbi_mcp/*
+!powerbi_mcp/*.py

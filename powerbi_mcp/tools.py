@@ -2,19 +2,22 @@
 MCP tools for Power BI operations.
 
 Discovery flow:
-  1. list_apps → get workspaceId from the app response
-  2. list_datasets(workspace_id) → get dataset id
-  3. execute_dax / list_tables / list_measures / list_columns (workspace_id + dataset_id)
+  1. list_apps      → get app id and workspaceId
+  2. list_datasets(app_id)  → discovers datasets from report metadata; returns
+                              dataset id + workspaceId per dataset
+  3. execute_dax / list_tables / list_measures / list_columns
+                    → use workspace_id (from step 2) + dataset_id
 
-All operations use in-group (/groups/) endpoints. The workspace_id must always
-come from list_apps (the app's workspaceId), never from workspace enumeration.
-Permissions at Miinto are granted through Power BI apps, not direct workspace
-membership — using the wrong workspace_id source causes 403 errors.
 """
 
 from __future__ import annotations
 
+import asyncio
+import csv
 import json
+import re
+from threading import Lock
+from time import time
 from typing import Annotated
 
 from mcp.server.fastmcp import FastMCP
@@ -53,6 +56,8 @@ def register_tools(
         Directory where large DAX query results are saved as CSV files.
     """
     _auth: PowerBIAuth | None = None
+    pending_flow: dict | None = None
+    auth_lock = Lock()
 
     def _get_auth() -> PowerBIAuth:
         """Lazily create the PowerBIAuth instance on first use."""
@@ -61,10 +66,12 @@ def register_tools(
             _auth = PowerBIAuth(client_id, tenant_id)
         return _auth
 
-    def _get_client() -> PowerBIClient:
-        """Return an authenticated API client, raising if no token is available."""
-        auth = _get_auth()
-        token = auth.get_token_silent()
+    def _get_token() -> str | None:
+        with auth_lock:
+            return _get_auth().get_token_silent()
+
+    async def _get_client() -> PowerBIClient:
+        token = await asyncio.to_thread(_get_token)
         if token is None:
             raise RuntimeError(
                 "Not authenticated. Call the `authenticate` tool first, then retry."
@@ -74,69 +81,40 @@ def register_tools(
     def _fmt_json(obj: object) -> str:
         return json.dumps(obj, indent=2, ensure_ascii=False, default=str)
 
-    @mcp.tool()
-    async def authenticate() -> str:
-        """
-        Authenticate with Power BI using the OAuth 2.0 device code flow.
-
-        Call this tool first if you have never logged in, or if a previous call
-        returned "Not authenticated".
-
-        The tool uses a two-step flow:
-        - First call: returns a URL and a one-time code for you to open in a browser.
-        - Second call: completes the authentication after you have signed in.
-
-        Your credentials are cached locally so you will not need to repeat this
-        step until the refresh token expires (~90 days).
-        """
-        import asyncio
-
+    def _authenticate() -> str:
+        nonlocal pending_flow
         auth = _get_auth()
-        token = auth.get_token_silent()
-        if token:
+        if auth.get_token_silent():
+            pending_flow = None
             return "Already authenticated. No action needed."
 
-        # Phase 2: complete a pending flow started in a previous call
-        pending = getattr(auth, "_pending_flow", None)
-        if pending:
-            try:
-                loop = asyncio.get_event_loop()
-                result = await asyncio.wait_for(
-                    loop.run_in_executor(
-                        None,
-                        lambda: auth.app.acquire_token_by_device_flow(pending),
-                    ),
-                    timeout=60.0,
-                )
-            except asyncio.TimeoutError:
-                return (
-                    "Still waiting for browser authentication. "
-                    "Complete the sign-in then call `authenticate` again."
-                )
+        now = time()
+        if pending_flow is not None and pending_flow["expires_at"] <= now:
+            pending_flow = None
 
+        if pending_flow is not None:
+            waiting = (
+                "Still waiting for browser authentication. "
+                "Complete the sign-in then call `authenticate` again."
+            )
+            next_poll = pending_flow.get("latest_attempt_at", 0) + pending_flow.get("interval", 5)
+            if now < next_poll:
+                return waiting
+
+            result = auth.poll_device_flow(pending_flow)
+            if result.get("error") in ("authorization_pending", "slow_down"):
+                return waiting
+
+            pending_flow = None
             if "access_token" in result:
-                auth._pending_flow = None
                 return "Authentication successful! You can now use all Power BI tools."
 
             error = result.get("error", "unknown")
-            if error == "authorization_pending":
-                return (
-                    "Still waiting for browser authentication. "
-                    "Complete the sign-in then call `authenticate` again."
-                )
+            return f"Authentication failed ({error}). Call `authenticate` again to restart."
 
-            # Flow expired or failed — clear so the next call starts fresh
-            auth._pending_flow = None
-            return (
-                f"Authentication failed ({error}): "
-                f"{result.get('error_description', 'unknown error')}. "
-                "Call `authenticate` again to restart."
-            )
-
-        # Phase 1: start a new device code flow and return the URL + code
-        flow = auth.initiate_device_flow()
-        verification_uri = flow.get("verification_uri", "https://microsoft.com/devicelogin")
-        user_code = flow["user_code"]
+        pending_flow = auth.initiate_device_flow()
+        verification_uri = pending_flow.get("verification_uri", "https://microsoft.com/devicelogin")
+        user_code = pending_flow["user_code"]
 
         return (
             f"## Power BI Authentication\n\n"
@@ -147,16 +125,39 @@ def register_tools(
         )
 
     @mcp.tool()
+    async def authenticate() -> str:
+        """
+        Authenticate with Power BI using the OAuth 2.0 device code flow.
+
+        The first call returns a URL and one-time code. Open the URL in a
+        browser, sign in, then call this tool again to complete sign-in.
+        Credentials are cached across sessions when OS secure storage is available.
+        """
+        return await asyncio.to_thread(_authenticate_locked)
+
+    def _authenticate_locked() -> str:
+        with auth_lock:
+            return _authenticate()
+
+    def _logout() -> str:
+        nonlocal pending_flow
+        with auth_lock:
+            pending_flow = None
+            auth = _get_auth()
+            auth.clear_cache()
+            if not auth.can_persist_tokens:
+                return ("Logged out of this session. OS secure storage is unavailable. "
+                        "To clear earlier saved credentials, restore access and call logout again.")
+        return "Logged out. Cached credentials have been cleared. Call `authenticate` to sign in again."
+
+    @mcp.tool()
     async def logout() -> str:
         """
         Sign out of Power BI by clearing the cached credentials.
 
         After logging out, call `authenticate` to sign in again.
         """
-        auth = _get_auth()
-        auth._pending_flow = None
-        auth.clear_cache()
-        return "Logged out. Cached credentials have been cleared. Call `authenticate` to sign in again."
+        return await asyncio.to_thread(_logout)
 
     @mcp.tool()
     async def list_apps() -> str:
@@ -166,14 +167,15 @@ def register_tools(
         Returns each app's id, name, description, publisher, last update time,
         and workspaceId of the underlying workspace.
 
-        Use the `workspaceId` field as `workspace_id` in `list_datasets` and
-        `get_dataset_info`.
+        Use the `id` field as `app_id` in `list_datasets`.
+        Use the `workspaceId` field as `workspace_id` in `list_tables`, `list_measures`, `list_columns`, and `execute_dax`.
+        (`list_datasets` resolves the workspace automatically — no need to pass it.)
 
         This is the correct starting point for dataset discovery — at Miinto
         all dataset access is managed through Power BI apps, so always start
         here rather than listing workspaces directly.
         """
-        client = _get_client()
+        client = await _get_client()
         try:
             apps = await client.list_apps()
         except PowerBIError as exc:
@@ -198,94 +200,51 @@ def register_tools(
 
     @mcp.tool()
     async def list_datasets(
-        workspace_id: Annotated[
+        app_id: Annotated[
             str,
-            "The GUID of the Power BI workspace that backs the app. "
-            "Get this from `list_apps` — use the `workspaceId` field, not the app `id`.",
+            "The app GUID from `list_apps` — use the `id` field, not `workspaceId`.",
         ],
     ) -> str:
         """
-        List all datasets (semantic models) in a Power BI workspace.
+        List all datasets (semantic models) accessible through a Power BI app.
 
-        Returns dataset id, name, configured-by, web URL, is-refreshable flag,
-        and the target storage mode (Import / DirectQuery / etc.).
-        Use the `id` field as `dataset_id` in subsequent tools.
+        Returns each dataset's id, name, configured-by, web URL, storage mode,
+        and the workspaceId that owns the dataset.  Use `id` as `dataset_id`
+        and `workspaceId` as `workspace_id` in subsequent tools
+        (`list_tables`, `list_measures`, `list_columns`, `execute_dax`).
 
-        The workspace_id must come from `list_apps` (workspaceId field), not
-        from `list_workspaces` — using the app-backed workspace ensures you
-        are working within the correct permission boundary.
+        Use `app_id` from `list_apps` (the `id` field).
+        The workspace is resolved automatically from the app.
         """
-        client = _get_client()
+        client = await _get_client()
         try:
-            datasets = await client.list_datasets(workspace_id)
+            # Resolve the app's workspaceId first — an app always belongs to one workspace.
+            apps = await client.list_apps()
+            app = next((a for a in apps if a.id == app_id), None)
+            if app is None or not app.workspace_id:
+                return f"App {app_id!r} not found or has no workspaceId. Call `list_apps` first."
+            results = await client.list_datasets(app_id, app.workspace_id)
         except PowerBIError as exc:
             return f"Error listing datasets: {exc}"
 
-        if not datasets:
-            return f"No datasets found in workspace {workspace_id!r}."
+        if not results:
+            return f"No datasets found for app {app_id!r}."
 
         summary = [
             {
                 "id": ds.id,
                 "name": ds.name,
+                "workspaceId": ws_id,
                 "configuredBy": ds.configured_by,
                 "targetStorageMode": ds.target_storage_mode,
                 "isRefreshable": ds.is_refreshable,
                 "createdDate": ds.created_date,
                 "webUrl": ds.web_url,
             }
-            for ds in datasets
+            for ds, ws_id in results
         ]
 
         return _fmt_json(summary)
-
-    @mcp.tool()
-    async def get_dataset_info(
-        workspace_id: Annotated[
-            str, "GUID of the workspace that contains the dataset (from list_apps workspaceId)."
-        ],
-        dataset_id: Annotated[str, "GUID of the dataset to inspect."],
-    ) -> str:
-        """
-        Return detailed metadata for a single Power BI dataset.
-
-        Includes name, owner, refresh schedule, storage mode, web URL, and more.
-        Also returns the last 5 refresh history entries so you can see data freshness.
-        """
-        client = _get_client()
-        try:
-            info = await client.get_dataset(workspace_id, dataset_id)
-            history = await client.get_dataset_refresh_history(
-                workspace_id, dataset_id, top=5
-            )
-        except PowerBIError as exc:
-            return f"Error retrieving dataset info: {exc}"
-
-        output = {
-            "dataset": {
-                "id": info.id,
-                "name": info.name,
-                "description": info.description,
-                "configuredBy": info.configured_by,
-                "targetStorageMode": info.target_storage_mode,
-                "isRefreshable": info.is_refreshable,
-                "isEffectiveIdentityRequired": info.is_effective_identity_required,
-                "isOnPremGatewayRequired": info.is_on_prem_gateway_required,
-                "createdDate": info.created_date,
-                "webUrl": info.web_url,
-            },
-            "recentRefreshes": [
-                {
-                    "requestId": r.request_id,
-                    "status": r.status,
-                    "startTime": r.start_time,
-                    "endTime": r.end_time,
-                    "refreshType": r.refresh_type,
-                }
-                for r in history
-            ],
-        }
-        return _fmt_json(output)
 
     @mcp.tool()
     async def list_tables(
@@ -301,7 +260,7 @@ def register_tools(
         are excluded.  Use the returned table names in `list_measures`,
         `list_columns`, and DAX queries.
         """
-        client = _get_client()
+        client = await _get_client()
         try:
             tables = await client.list_tables(workspace_id, dataset_id)
         except PowerBIError as exc:
@@ -344,7 +303,7 @@ def register_tools(
         Returns each measure's name, parent table, description, and format string.
         Optionally filter by table name.
         """
-        client = _get_client()
+        client = await _get_client()
         try:
             measures = await client.list_measures(workspace_id, dataset_id, table_name)
         except PowerBIError as exc:
@@ -384,7 +343,7 @@ def register_tools(
         Returns each column's name, parent table, description, data type, and
         whether it is a key column.  Optionally filter by table name.
         """
-        client = _get_client()
+        client = await _get_client()
         try:
             columns = await client.list_columns(workspace_id, dataset_id, table_name)
         except PowerBIError as exc:
@@ -415,14 +374,13 @@ def register_tools(
         dataset_id: Annotated[str, "GUID of the dataset to query."],
         dax_query: Annotated[
             str,
-            "A valid DAX query. Must start with EVALUATE. "
+            "A valid DAX query that returns a single table. "
             'Example: "EVALUATE SUMMARIZECOLUMNS(\'Date\'[Year], \\"Sales\\", [Total Sales])"',
         ],
         max_rows: Annotated[
             int | None,
-            "Optional hard cap on the number of rows returned. When set, the query "
-            "is wrapped in TOPN(<max_rows>, ...) before execution, limiting results "
-            "at the Power BI engine level. Useful for sampling large tables.",
+            "Optional positive cap on the number of rows returned. Simple EVALUATE "
+            "queries are also wrapped in TOPN before execution.",
         ] = None,
         result_name: Annotated[
             str | None,
@@ -430,7 +388,7 @@ def register_tools(
             "(e.g. 'sales by region 2024'). Used in the CSV filename so saved files "
             "are easy to identify later. Maximum 40 characters; special characters "
             "are replaced with underscores. Example filename: "
-            "dax_result_sales_by_region_2024_20260305_143022.csv",
+            "dax_result_sales_by_region_2024_20260305_143022-abcd1234.csv",
         ] = None,
         query_summary: Annotated[
             str | None,
@@ -443,8 +401,7 @@ def register_tools(
         """
         Execute a DAX query against a Power BI dataset and return the result rows.
 
-        The query must start with EVALUATE (standard DAX query syntax).
-        Results are returned as a JSON array of objects, with column names as keys.
+        The query must return a single table, with column names as keys in the result.
 
         Small results (<= 50 rows) are returned inline as JSON.
         Large results (> 50 rows) are automatically saved to a CSV file and a
@@ -473,10 +430,18 @@ def register_tools(
         from .client import _parse_dax_rows
 
         original_dax = dax_query
-        if max_rows is not None and max_rows > 0:
-            dax_query = f"EVALUATE TOPN({max_rows}, {dax_query[len('EVALUATE'):].strip()})"
+        if max_rows is not None:
+            if max_rows < 1:
+                return "max_rows must be positive."
+            evaluate = re.match(r"\s*EVALUATE\b", dax_query, re.IGNORECASE)
+            if evaluate:
+                expression = dax_query[evaluate.end():].strip().removesuffix(";")
+                if expression and not re.search(
+                    r"\b(?:ORDER\s+BY|START\s+AT|EVALUATE)\b", expression, re.IGNORECASE
+                ):
+                    dax_query = f"EVALUATE TOPN({max_rows}, {expression}\n)"
 
-        client = _get_client()
+        client = await _get_client()
         try:
             raw = await client.execute_dax(workspace_id, dataset_id, dax_query)
         except PowerBIError as exc:
@@ -484,46 +449,30 @@ def register_tools(
                 return (
                     f"DAX query error: {exc}\n\n"
                     "This usually means the user lacks Build permission on this "
-                    "dataset. Ensure workspace_id comes from `list_apps` "
-                    "(the workspaceId field) and not from `list_workspaces`."
+                    "dataset. Use the dataset's `workspaceId` from `list_datasets`."
                 )
             return f"DAX query error: {exc}"
 
         rows = _parse_dax_rows(raw)
+        if max_rows is not None:
+            rows = rows[:max_rows]
 
-        if not rows:
-            return "Query executed successfully but returned no rows."
-
-        columns = list(rows[0].keys())
-
-        # --- Log to history ---
+        columns = list(dict.fromkeys(key for row in rows for key in row))
+        result: dict[str, object] = {"rowCount": len(rows)}
         csv_path = None
-
         if len(rows) <= INLINE_ROW_LIMIT:
-            log_entry = make_log_entry(
-                dataset_id=dataset_id,
-                dax_query=original_dax,
-                row_count=len(rows),
-                columns=columns,
-                query_summary=query_summary,
-                result_name=result_name,
-                csv_path=None,
-                max_rows=max_rows,
-            )
+            result["rows"] = rows
+        else:
+            result.update(columns=columns, preview=rows[:5])
             try:
-                append_query_log(output_dir, log_entry)
-            except Exception:
-                pass  # logging should never break the tool
-            return _fmt_json({
-                "rowCount": len(rows),
-                "rows": rows,
-                "historyEntryId": log_entry["id"],
-            })
-
-        try:
-            csv_path = save_rows_to_csv(rows, output_dir, name=result_name)
-        except Exception as exc:
-            return _fmt_json({"rowCount": len(rows), "rows": rows, "saveError": str(exc)})
+                csv_path = await asyncio.to_thread(save_rows_to_csv, rows, output_dir, name=result_name)
+            except (OSError, csv.Error, UnicodeError) as exc:
+                result["saveError"] = str(exc)
+            else:
+                result["savedTo"] = csv_path
+                result["message"] = (
+                    "Use `read_query_result` to page through the saved CSV, or read the file directly."
+                )
 
         log_entry = make_log_entry(
             dataset_id=dataset_id,
@@ -536,23 +485,13 @@ def register_tools(
             max_rows=max_rows,
         )
         try:
-            append_query_log(output_dir, log_entry)
-        except Exception:
-            pass
-
-        preview = rows[:5]
-        result = {
-            "rowCount": len(rows),
-            "columns": columns,
-            "preview": preview,
-            "savedTo": csv_path,
-            "historyEntryId": log_entry["id"],
-            "message": (
-                f"Large result ({len(rows)} rows) saved to CSV. "
-                "Use `read_query_result` to page through the data, "
-                "or read the file directly."
-            ),
-        }
+            await asyncio.to_thread(append_query_log, output_dir, log_entry)
+        except (OSError, UnicodeError) as exc:
+            result["historyError"] = str(exc)
+        else:
+            result["historyEntryId"] = log_entry["id"]
+            if not rows:
+                return "Query executed successfully but returned no rows."
         return _fmt_json(result)
 
     @mcp.tool()
@@ -590,10 +529,12 @@ def register_tools(
         3. If hasMore is true, call again with offset=100, then 200, etc.
         """
         try:
-            page = read_csv_page(file_path, offset=offset, limit=limit)
+            page = await asyncio.to_thread(
+                read_csv_page, file_path, offset=offset, limit=limit, output_dir=output_dir
+            )
         except FileNotFoundError:
             return f"File not found: {file_path!r}. Re-run the DAX query to regenerate it."
-        except Exception as exc:
+        except (OSError, csv.Error, ValueError) as exc:
             return f"Error reading result file: {exc}"
 
         return _fmt_json(page)
@@ -634,7 +575,8 @@ def register_tools(
         (e.g. "revenue by market") — it matches against the query summary,
         the DAX text, and the result name.
         """
-        entries = search_query_log(
+        entries = await asyncio.to_thread(
+            search_query_log,
             output_dir,
             keyword=keyword,
             dataset_id=dataset_id,
@@ -666,7 +608,7 @@ def register_tools(
         should not appear in future history searches. The associated CSV file
         (if any) is NOT deleted — only the log entry is removed.
         """
-        removed = _delete_log_entry(output_dir, entry_id)
+        removed = await asyncio.to_thread(_delete_log_entry, output_dir, entry_id)
         if removed:
             return f"History entry {entry_id} has been removed."
         return f"No history entry found with id {entry_id!r}. It may have already been deleted."

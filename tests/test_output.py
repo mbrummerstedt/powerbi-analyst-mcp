@@ -18,6 +18,13 @@ from powerbi_mcp.output import read_csv_page, save_rows_to_csv
 
 
 class TestSaveRowsToCsv:
+    def test_same_name_exports_preserve_both_results(self, tmp_path: Path):
+        first = save_rows_to_csv([{"value": 1}], str(tmp_path), name="sales")
+        second = save_rows_to_csv([{"value": 2}], str(tmp_path), name="sales")
+        assert first != second
+        assert read_csv_page(first)["rows"] == [{"value": "1"}]
+        assert read_csv_page(second)["rows"] == [{"value": "2"}]
+
     def test_creates_directory_if_missing(self, tmp_path: Path):
         output_dir = str(tmp_path / "subdir" / "nested")
         rows = [{"a": 1, "b": 2}]
@@ -57,21 +64,20 @@ class TestSaveRowsToCsv:
         long_name = "a" * 60
         path = save_rows_to_csv(rows, str(tmp_path), name=long_name)
         # slug part should be at most 40 chars
-        stem = Path(path).stem  # e.g. dax_result_aaa...a_20260305_143022
-        # strip leading "dax_result_" and trailing "_YYYYMMDD_HHMMSS"
+        stem = Path(path).stem.rsplit("-", 1)[0]
+        # Strip the prefix and timestamp.
         inner = stem[len("dax_result_"):]
-        slug_part = "_".join(inner.split("_")[:-2])  # remove last two timestamp segments
+        slug_part = inner.rsplit("_", 2)[0]
         assert len(slug_part) <= 40
 
-    def test_no_name_falls_back_to_timestamp_only(self, tmp_path: Path):
+    def test_no_name_starts_with_the_timestamp(self, tmp_path: Path):
         rows = [{"x": 1}]
         path = save_rows_to_csv(rows, str(tmp_path))
-        # name should be dax_result_YYYYMMDD_HHMMSS — no extra segment between
-        parts = Path(path).stem.split("_")
+        parts = Path(path).stem.rsplit("-", 1)[0].split("_")
         assert parts[0] == "dax"
         assert parts[1] == "result"
-        # third segment is date, fourth is time — no extra word segments
-        assert len(parts) == 4
+        assert len(parts[2]) == 8 and parts[2].isdigit()
+        assert len(parts[3]) == 6 and parts[3].isdigit()
 
     def test_special_characters_sanitized(self, tmp_path: Path):
         rows = [{"x": 1}]

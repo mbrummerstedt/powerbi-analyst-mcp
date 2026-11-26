@@ -88,9 +88,8 @@ The agent explores the schema, writes the DAX, handles the file, and delivers th
 |---|---|
 | `authenticate` | Sign in via OAuth device code — returns a URL + one-time code; call again to complete |
 | `logout` | Clear the cached token (forces re-authentication) |
-| `list_apps` | List all Power BI apps you have access to — **start here**; returns `workspaceId` for each app |
-| `list_datasets` | List datasets / semantic models in a workspace (use `workspaceId` from `list_apps`) |
-| `get_dataset_info` | Metadata and last 5 refresh history entries for a dataset |
+| `list_apps` | List all Power BI apps you have access to — **start here**; returns `id` and `workspaceId` for each app |
+| `list_datasets` | List datasets accessible through an app (use `id` from `list_apps`); workspace is resolved automatically |
 | `list_tables` | All visible tables in a dataset |
 | `list_measures` | Measures with name, table, description, and format string |
 | `list_columns` | Columns with data type and key flag |
@@ -111,7 +110,7 @@ The agent explores the schema, writes the DAX, handles the file, and delivers th
 
 ### Step 1 — Create an Azure AD app registration
 
-OAuth 2.0 requires a **client ID** to identify which application is acting on your behalf. The registration is free, requires no client secret, and does not need Power BI admin consent for the two read-only scopes used here.
+OAuth 2.0 requires a **client ID** to identify which application is acting on your behalf. The registration is free and uses delegated read permissions. Your tenant’s consent policy determines whether an administrator must approve them.
 
 1. Go to [portal.azure.com](https://portal.azure.com) → **Azure Active Directory** → **App registrations** → **New registration**.
 2. Name it (e.g. `PowerBI MCP`). For account types choose **Accounts in this organizational directory only** (single-tenant). Click **Register**.
@@ -122,7 +121,9 @@ OAuth 2.0 requires a **client ID** to identify which application is acting on yo
 4. Still under **Authentication** → **Advanced settings**, set **Allow public client flows** to **Yes**. Save.
 5. Under **API permissions** → **Add a permission** → **Power BI Service**, add:
    - `Dataset.Read.All`
+   - `Report.Read.All`
    - `Workspace.Read.All`
+   - `App.Read.All`
 
    If your tenant requires admin consent, ask an admin to grant it.
 
@@ -197,7 +198,7 @@ Then replace the `uvx` command block with:
 
 #### Claude Desktop bundle (.mcpb) — for organisation-wide distribution
 
-A `.mcpb` (MCP Bundle) is a ZIP archive that Claude Desktop installs via drag-and-drop — no manual config editing required. The bundle auto-installs all Python dependencies on first run; the only prerequisite is Python 3.10+.
+A `.mcpb` (MCP Bundle) is a ZIP archive that Claude Desktop installs via drag-and-drop — no manual config editing required. The bundle uses uv to install the Python runtime and locked dependencies on first run. The configured command requires uv on the Claude Desktop PATH.
 
 Two manifests live in [`bundle/`](bundle/):
 
@@ -213,24 +214,13 @@ Two manifests live in [`bundle/`](bundle/):
 cp bundle/manifest.template.json bundle/manifest.json
 ```
 
-Edit `bundle/manifest.json` and set your values in `mcp_config.env`:
-
-```json
-"env": {
-  "POWERBI_CLIENT_ID": "your-application-client-id",
-  "POWERBI_TENANT_ID": "your-directory-tenant-id",
-  "POWERBI_OUTPUT_DIR": "/custom/output/path"
-}
-```
-
-`POWERBI_OUTPUT_DIR` is optional — omit it entirely to use the default `~/powerbi_output`.
+Set `POWERBI_CLIENT_ID` and `POWERBI_TENANT_ID` in the repository’s ignored `.env` file. The build script reads these values into the archive. To set a custom output directory, edit `server.mcp_config.env.POWERBI_OUTPUT_DIR` in the private manifest.
 
 ```bash
-# 2. Build the bundle
-chmod +x bundle/build.sh
-./bundle/build.sh
-# → dist/miinto-powerbi-analyst.mcpb  (gitignored)
+bash bundle/build.sh
 ```
+
+The archive is written to `dist/<manifest-name>.mcpb`. It contains the same dependency lockfile used by CI and Docker.
 
 **Distributing:** Share `dist/*.mcpb` with colleagues. They drag-and-drop it onto **Claude Desktop → Settings → Developer**. Works on macOS and Windows.
 
@@ -245,8 +235,8 @@ Once connected, ask your LLM to follow this sequence naturally:
 ```
 1. authenticate          ← first run only; returns a URL + code to open in browser,
                            then call authenticate again to complete sign-in
-2. list_apps             → returns installed apps, each with a workspaceId
-3. list_datasets         workspace_id=<workspaceId from app>   → returns dataset IDs
+2. list_apps             → returns installed apps with id and workspaceId
+3. list_datasets         app_id=<id from app>   → returns dataset IDs + workspaceId per dataset
 4. list_tables           workspace_id=<id>   dataset_id=<id>
 5. list_measures         workspace_id=<id>   dataset_id=<id>   [table_name=<name>]
 6. list_columns          workspace_id=<id>   dataset_id=<id>   [table_name=<name>]
@@ -260,7 +250,7 @@ Once connected, ask your LLM to follow this sequence naturally:
                          ← page through large results without filling context
 ```
 
-> **Note:** Always use `list_apps` (not `list_workspaces`) to discover workspace IDs. In app-managed organisations, dataset access is granted through Power BI apps — using workspace IDs from `list_workspaces` may result in permission errors.
+> **Note:** Always use `list_apps` as the starting point. In app-managed organisations (like most enterprise Power BI setups), dataset access is granted through Power BI apps — `list_datasets` uses report metadata to find datasets in the app's workspace, which works correctly regardless of direct workspace membership.
 
 ### DAX query examples
 
@@ -322,7 +312,7 @@ Returns `rows`, `totalRows`, `offset`, `limit`, and `hasMore`. Increment `offset
 |---|---|---|
 | `query_summary` | `str` (optional) | Short description of what the user asked for — logged to the local query history for auditability and cross-session reuse. |
 | `result_name` | `str` (optional) | Short label used in the CSV filename — e.g. `"gmv by market 2024"` → `dax_result_gmv_by_market_2024_20260305_143022.csv`. Max 40 characters. |
-| `max_rows` | `int` (optional) | Hard cap applied via `TOPN` at the Power BI engine level. Useful for quick sampling without rewriting the DAX. |
+| `max_rows` | `int` (optional) | Maximum rows returned or saved. Simple EVALUATE queries also use TOPN inside Power BI. |
 
 **Output directory** defaults to `~/powerbi_output`. Override with `POWERBI_OUTPUT_DIR` in your MCP client's `env` block. CSV files and the query history log are not automatically cleaned up — manage the directory manually or add a retention policy.
 
@@ -340,11 +330,14 @@ Returns `rows`, `totalRows`, `offset`, `limit`, and `hasMore`. Increment `offset
 
 ## Security
 
+CSV exports preserve the text returned by Power BI. When importing untrusted results into a spreadsheet, import text columns as text to prevent formula evaluation.
+
 - Tokens are persisted using OS-native secure storage via [`msal-extensions`](https://github.com/AzureAD/microsoft-authentication-extensions-for-python):
-  - **macOS** — Keychain
-  - **Windows** — DPAPI-encrypted file
-  - **Linux** — LibSecret (gnome-keyring / KWallet); falls back to an encrypted file if unavailable
-- The cache file is written to `~/.powerbi_mcp_token_cache.bin` and is covered by `.gitignore`.
+  - **macOS** uses Keychain.
+  - **Windows** uses a DPAPI-encrypted file.
+  - **Linux** uses LibSecret (gnome-keyring / KWallet).
+- When the OS secure store is unavailable, sign-in lasts only for the current server process. Use the `authenticate` tool to sign in on headless systems.
+- `~/.powerbi_mcp_token_cache.bin` holds encrypted tokens on Windows and signals cache updates on macOS and Linux. Older versions could write plaintext tokens to this path when secure storage failed. If you used that fallback, remove the legacy file and sign in again.
 - The server never logs access tokens.
 - All data access is gated by the user's own Power BI permissions (delegated OAuth 2.0 — no service principal, no client secret).
 

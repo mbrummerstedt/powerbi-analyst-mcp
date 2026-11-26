@@ -2,25 +2,12 @@
 # Build dist/miinto-powerbi-analyst.mcpb from bundle/ config + live source.
 # Always creates a fresh zip — no incremental updates, no stale pycache.
 #
-# Credentials (POWERBI_CLIENT_ID, POWERBI_TENANT_ID) are injected into the
-# manifest at build time from the repo root .env file. The committed
-# manifest.json uses "${POWERBI_CLIENT_ID}" / "${POWERBI_TENANT_ID}"
-# placeholders so no secrets sit in the working tree.
-#
-# Prerequisites:
-#   - bundle/manifest.json must exist and contain no placeholder values
-#   - python3
-#   - .env with POWERBI_CLIENT_ID and POWERBI_TENANT_ID
+# The internal archive includes organization IDs loaded from .env by uv.
+# Copy bundle/manifest.template.json to bundle/manifest.json before building.
 set -euo pipefail
 
 BUNDLE_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")" && pwd)"
 REPO_ROOT="$(dirname "$BUNDLE_DIR")"
-
-if [[ ! -f "$BUNDLE_DIR/manifest.json" ]]; then
-  echo "Error: bundle/manifest.json not found."
-  echo "  cp bundle/manifest.template.json bundle/manifest.json"
-  exit 1
-fi
 
 if [[ ! -f "$REPO_ROOT/.env" ]]; then
   echo "Error: .env not found at repo root."
@@ -28,41 +15,53 @@ if [[ ! -f "$REPO_ROOT/.env" ]]; then
   exit 1
 fi
 
-# Load .env (export so python3 subprocess inherits)
-set -a
-# shellcheck disable=SC1091
-source "$REPO_ROOT/.env"
-set +a
+uv lock --check --project "$REPO_ROOT"
+uv run --no-project --python "$(cat "$BUNDLE_DIR/.python-version")" --env-file "$REPO_ROOT/.env" python - "$BUNDLE_DIR" <<'PYTHON'
+import zipfile, pathlib, json, sys, re, os, tempfile, tomllib
 
-: "${POWERBI_CLIENT_ID:?POWERBI_CLIENT_ID missing from .env}"
-: "${POWERBI_TENANT_ID:?POWERBI_TENANT_ID missing from .env}"
+bundle = pathlib.Path(sys.argv[1])
+repo = bundle.parent
+manifest_path = bundle / "manifest.json"
+if not manifest_path.exists():
+    sys.exit("Copy bundle/manifest.template.json to bundle/manifest.json before building.")
+manifest = json.loads(manifest_path.read_text(encoding="utf-8"))
+with (bundle / "pyproject.toml").open("rb") as project:
+    bundle_project = tomllib.load(project)["project"]
+manifest["version"] = bundle_project["version"]
+with (repo / "pyproject.toml").open("rb") as project:
+    package = tomllib.load(project)["project"]
+if set(bundle_project["dependencies"]) != set(package["dependencies"]):
+    sys.exit("Bundle dependencies differ from the package dependencies.")
+for key in ("POWERBI_CLIENT_ID", "POWERBI_TENANT_ID"):
+    if not os.environ.get(key):
+        sys.exit(f"{key} missing from environment")
 
-if grep -q "FILL_IN_\|YOUR_AZURE" "$BUNDLE_DIR/manifest.json"; then
-  echo "Error: manifest.json still contains placeholder values."
-  exit 1
-fi
-
-python3 - <<EOF
-import zipfile, pathlib, json, sys, re, os, tempfile
-
-bundle = pathlib.Path("$BUNDLE_DIR")
-repo   = pathlib.Path("$REPO_ROOT")
-
-manifest = json.loads((bundle / "manifest.json").read_text())
+# Existing private manifests may predate the lockfile.
+args = manifest["server"]["mcp_config"]["args"]
+if args[:1] == ["run"] and "--locked" not in args:
+    args.insert(1, "--locked")
 
 # Inject credentials from environment into env block
 env_block = manifest["server"]["mcp_config"].setdefault("env", {})
 env_block["POWERBI_CLIENT_ID"] = os.environ["POWERBI_CLIENT_ID"]
 env_block["POWERBI_TENANT_ID"] = os.environ["POWERBI_TENANT_ID"]
 
-name     = manifest["name"]
+name = manifest["name"]
+if not re.fullmatch(r"[A-Za-z0-9_-]+", name):
+    sys.exit("Invalid bundle name")
 out      = repo / "dist" / f"{name}.mcpb"
 out.parent.mkdir(parents=True, exist_ok=True)
 
-config_files = ["pyproject.toml", ".python-version"]
-missing = [f for f in config_files if not (bundle / f).exists()]
+config_files = [
+    bundle / ".python-version",
+    repo / "pyproject.toml",
+    repo / "uv.lock",
+    repo / "LICENSE",
+    repo / "README.md",
+]
+missing = [str(f) for f in config_files if not f.is_file()]
 if missing:
-    sys.exit(f"Missing bundle/ files: {missing}")
+    sys.exit(f"Missing bundle inputs: {missing}")
 
 # --- Validate manifest tools match registered tools in code ---
 tools_py = (repo / "powerbi_mcp" / "tools.py").read_text()
@@ -82,22 +81,23 @@ if missing_from_manifest or missing_from_code:
 
 print(f"Tool check OK: {len(code_tools)} tools in both code and manifest.")
 
-# Write the injected manifest to a temp file and zip it (avoid mutating the source)
-with tempfile.TemporaryDirectory() as tmp:
-    injected = pathlib.Path(tmp) / "manifest.json"
-    injected.write_text(json.dumps(manifest, indent=2))
+# Publish the completed private archive atomically.
+with tempfile.TemporaryDirectory(dir=out.parent) as tmp:
+    archive = pathlib.Path(tmp) / "bundle.mcpb"
+    with archive.open("xb") as stream:
+        with zipfile.ZipFile(stream, "w", zipfile.ZIP_DEFLATED) as z:
+            z.writestr("manifest.json", json.dumps(manifest, indent=2))
+            for f in config_files:
+                z.write(f, f.name)
+            for p in sorted((repo / "powerbi_mcp").glob("*.py")):
+                if p.is_symlink():
+                    sys.exit(f"Refusing symlink in bundle: {p.name}")
+                z.write(p, p.relative_to(repo))
+            names = z.namelist()
+    archive.chmod(0o600)
+    archive.replace(out)
 
-    with zipfile.ZipFile(out, "w", zipfile.ZIP_DEFLATED) as z:
-        z.write(injected, "manifest.json")
-        for f in config_files:
-            z.write(bundle / f, f)
-        for p in sorted((repo / "powerbi_mcp").rglob("*")):
-            if "__pycache__" in p.parts or p.suffix == ".pyc":
-                continue
-            z.write(p, p.relative_to(repo))
-
-names = zipfile.ZipFile(out).namelist()
 print(f"Built {out} ({len(names)} files)")
 for n in names:
     print(f"  {n}")
-EOF
+PYTHON

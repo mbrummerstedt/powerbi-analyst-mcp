@@ -24,6 +24,40 @@ class App(BaseModel):
     workspace_id: Optional[str] = Field(None, alias="workspaceId")
 
 
+class AppReport(BaseModel):
+    """
+    A report returned from the app-context endpoint (/apps/{appId}/reports).
+
+    Note: ``dataset_id`` is deliberately empty string in app context — the API
+    detaches reports from their datasets.  Use ``original_report_object_id`` to
+    resolve the report in workspace context where the real ``datasetId`` lives.
+    """
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    name: str
+    dataset_id: Optional[str] = Field(None, alias="datasetId")
+    original_report_object_id: Optional[str] = Field(
+        None, alias="originalReportObjectId"
+    )
+    workspace_id: Optional[str] = Field(None, alias="workspaceId")
+    web_url: Optional[str] = Field(None, alias="webUrl")
+
+
+class UserReport(BaseModel):
+    """A report returned from the org-level /myorg/reports endpoint."""
+
+    model_config = ConfigDict(populate_by_name=True)
+
+    id: str
+    name: str
+    app_id: Optional[str] = Field(None, alias="appId")
+    dataset_id: Optional[str] = Field(None, alias="datasetId")
+    dataset_workspace_id: Optional[str] = Field(None, alias="datasetWorkspaceId")
+    web_url: Optional[str] = Field(None, alias="webUrl")
+
+
 class Workspace(BaseModel):
     """A Power BI workspace (group)."""
 

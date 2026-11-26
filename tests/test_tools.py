@@ -10,7 +10,6 @@ from __future__ import annotations
 
 import csv
 import json
-import re
 from pathlib import Path
 from unittest.mock import patch
 
@@ -30,12 +29,24 @@ from tests.conftest import (
     make_dataset_payload,
     make_dax_response,
     make_measure_dax_row,
-    make_refresh_entry_payload,
     make_table_dax_row,
-    make_workspace_payload,
+    make_user_report_payload,
 )
 
 BASE = "https://api.powerbi.com/v1.0/myorg"
+
+
+@pytest.fixture(autouse=True)
+def offline_msal(monkeypatch):
+    monkeypatch.setattr(
+        "msal.PublicClientApplication.__init__",
+        lambda *arguments, **options: None,
+    )
+
+    def unavailable_secure_store(_path):
+        raise RuntimeError("No secure store in test")
+
+    monkeypatch.setattr("powerbi_mcp.auth.build_encrypted_persistence", unavailable_secure_store)
 
 
 @pytest.fixture
@@ -112,6 +123,31 @@ class TestAuthenticate:
             result = await call(mcp, "authenticate")  # Phase 2
         assert "Still waiting" in result or "waiting" in result.lower()
         assert "authenticate" in result
+
+    async def test_phase2_polls_once_and_respects_the_retry_interval(self, monkeypatch):
+        clock = 100
+        flow = {**FAKE_FLOW, "interval": 5}
+
+        def poll(flow, *, exit_condition):
+            assert exit_condition(flow)
+            flow["latest_attempt_at"] = clock
+            flow["interval"] += 5
+            return {"error": "slow_down"}
+
+        monkeypatch.setattr("powerbi_mcp.tools.time", lambda: clock, raising=False)
+        mcp = FastMCP("Power BI Test")
+        with patch("powerbi_mcp.auth.PowerBIAuth.get_token_silent", return_value=None), \
+             patch("msal.PublicClientApplication.initiate_device_flow", return_value=flow), \
+             patch("msal.PublicClientApplication.acquire_token_by_device_flow", side_effect=poll) as acquire:
+            register_tools(mcp, "fake-client-id")
+            await call(mcp, "authenticate")
+            assert "Still waiting" in await call(mcp, "authenticate")
+            clock = 105
+            assert "Still waiting" in await call(mcp, "authenticate")
+            acquire.assert_called_once()
+            clock = 110
+            assert "Still waiting" in await call(mcp, "authenticate")
+            assert acquire.call_count == 2
 
     async def test_phase2_flow_failure_clears_pending_and_instructs_restart(self):
         """Phase 2: expired or rejected flow → clears pending flow, tells user to restart."""
@@ -201,72 +237,49 @@ class TestListApps:
 
 
 class TestListDatasets:
+    def _mock_apps(self):
+        """Mock the list_apps call that the tool uses to resolve workspaceId."""
+        respx.get(f"{BASE}/apps").mock(
+            return_value=Response(200, json={"value": [make_app_payload()]})
+        )
+
+    def _mock_full_flow(self):
+        """Register respx mocks for list_apps + org-level reports + dataset resolution."""
+        self._mock_apps()
+        respx.get(f"{BASE}/reports").mock(
+            return_value=Response(200, json={"value": [make_user_report_payload()]})
+        )
+        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
+            return_value=Response(200, json=make_dataset_payload())
+        )
+
     @respx.mock
     async def test_happy_path_returns_json(self, mcp_with_tools: FastMCP):
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets").mock(
-            return_value=Response(200, json={"value": [make_dataset_payload()]})
-        )
-        result = await call(mcp_with_tools, "list_datasets", workspace_id=WORKSPACE_ID)
+        self._mock_full_flow()
+        result = await call(mcp_with_tools, "list_datasets", app_id=APP_ID)
         data = json.loads(result)
         assert len(data) == 1
         assert data[0]["id"] == DATASET_ID
         assert data[0]["name"] == "Test Dataset"
+        assert data[0]["workspaceId"] == WORKSPACE_ID
 
     @respx.mock
     async def test_empty_returns_human_message(self, mcp_with_tools: FastMCP):
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets").mock(
+        self._mock_apps()
+        respx.get(f"{BASE}/reports").mock(
             return_value=Response(200, json={"value": []})
         )
-        result = await call(mcp_with_tools, "list_datasets", workspace_id=WORKSPACE_ID)
+        result = await call(mcp_with_tools, "list_datasets", app_id=APP_ID)
         assert "No datasets found" in result
 
     @respx.mock
     async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets").mock(
+        self._mock_apps()
+        respx.get(f"{BASE}/reports").mock(
             return_value=Response(500, json={"error": {"message": "Server Error"}})
         )
-        result = await call(mcp_with_tools, "list_datasets", workspace_id=WORKSPACE_ID)
+        result = await call(mcp_with_tools, "list_datasets", app_id=APP_ID)
         assert "Error listing datasets" in result
-
-
-# ---------------------------------------------------------------------------
-# get_dataset_info
-# ---------------------------------------------------------------------------
-
-
-class TestGetDatasetInfo:
-    @respx.mock
-    async def test_returns_dataset_and_refreshes_keys(self, mcp_with_tools: FastMCP):
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
-            return_value=Response(200, json=make_dataset_payload())
-        )
-        respx.get(
-            f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}/refreshes",
-        ).mock(
-            return_value=Response(200, json={"value": [make_refresh_entry_payload()]})
-        )
-        result = await call(
-            mcp_with_tools, "get_dataset_info",
-            workspace_id=WORKSPACE_ID,
-            dataset_id=DATASET_ID,
-        )
-        data = json.loads(result)
-        assert "dataset" in data
-        assert "recentRefreshes" in data
-        assert data["dataset"]["name"] == "Test Dataset"
-        assert len(data["recentRefreshes"]) == 1
-
-    @respx.mock
-    async def test_api_error_returns_error_string(self, mcp_with_tools: FastMCP):
-        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
-            return_value=Response(404, json={"error": {"message": "Not found"}})
-        )
-        result = await call(
-            mcp_with_tools, "get_dataset_info",
-            workspace_id=WORKSPACE_ID,
-            dataset_id=DATASET_ID,
-        )
-        assert "Error retrieving dataset info" in result
 
 
 # ---------------------------------------------------------------------------
@@ -551,11 +564,24 @@ class TestExecuteDax:
             mcp_with_tools, "execute_dax",
             workspace_id=WORKSPACE_ID,
             dataset_id=DATASET_ID,
-            dax_query="EVALUATE Sales",
+            dax_query="  evaluate Sales",
             max_rows=10,
         )
         assert captured, "No query was captured"
-        assert "TOPN(10" in captured[0]
+        assert "TOPN(10, Sales" in captured[0]
+
+    @respx.mock
+    async def test_max_rows_caps_ordered_query_results(self, mcp_with_tools: FastMCP):
+        query = "EVALUATE Sales ORDER BY Sales[Date]"
+        route = respx.post(f"{BASE}/datasets/{DATASET_ID}/executeQueries").mock(
+            return_value=Response(200, json=make_dax_response([{"[x]": 1}, {"[x]": 2}]))
+        )
+        result = await call(
+            mcp_with_tools, "execute_dax", workspace_id=WORKSPACE_ID,
+            dataset_id=DATASET_ID, dax_query=query, max_rows=1,
+        )
+        assert json.loads(route.calls.last.request.content)["queries"][0]["query"] == query
+        assert json.loads(result)["rows"] == [{"x": 1}]
 
 
 # ---------------------------------------------------------------------------
@@ -574,8 +600,30 @@ def _make_csv(path: Path, n_rows: int) -> Path:
 
 
 class TestReadQueryResult:
+    async def test_rejects_a_csv_outside_export_dir(
+        self, mcp_with_tools: FastMCP, tmp_path: Path
+    ):
+        other_dir = tmp_path / "unrelated"
+        other_dir.mkdir()
+        unrelated = _make_csv(other_dir / "dax_result_20260101_000000.csv", 1)
+        result = await call(
+            mcp_with_tools, "read_query_result",
+            file_path=str(unrelated),
+        )
+        assert "must be a saved Power BI CSV" in result
+
+    async def test_rejects_symlink(self, mcp_with_tools: FastMCP, tmp_path: Path):
+        unrelated = _make_csv(tmp_path / "unrelated.csv", 10)
+        link = tmp_path / "dax_result_20260101_000000.csv"
+        try:
+            link.symlink_to(unrelated)
+        except OSError:
+            pytest.skip("Symlinks are unavailable")
+        result = await call(mcp_with_tools, "read_query_result", file_path=str(link))
+        assert "without symbolic or hard links" in result
+
     async def test_first_page(self, mcp_with_tools: FastMCP, tmp_path: Path):
-        csv_file = _make_csv(tmp_path / "result.csv", 200)
+        csv_file = _make_csv(tmp_path / "dax_result_20260101_000000.csv", 200)
         result = await call(
             mcp_with_tools, "read_query_result",
             file_path=str(csv_file),
@@ -589,7 +637,7 @@ class TestReadQueryResult:
         assert data["offset"] == 0
 
     async def test_last_page_has_more_false(self, mcp_with_tools: FastMCP, tmp_path: Path):
-        csv_file = _make_csv(tmp_path / "result.csv", 10)
+        csv_file = _make_csv(tmp_path / "dax_result_20260101_000000.csv", 10)
         result = await call(
             mcp_with_tools, "read_query_result",
             file_path=str(csv_file),
@@ -605,12 +653,12 @@ class TestReadQueryResult:
     ):
         result = await call(
             mcp_with_tools, "read_query_result",
-            file_path=str(tmp_path / "nonexistent.csv"),
+            file_path=str(tmp_path / "dax_result_20260101_000000.csv"),
         )
         assert "File not found" in result
 
     async def test_default_limit_is_100(self, mcp_with_tools: FastMCP, tmp_path: Path):
-        csv_file = _make_csv(tmp_path / "result.csv", 300)
+        csv_file = _make_csv(tmp_path / "dax_result_20260101_000000.csv", 300)
         result = await call(
             mcp_with_tools, "read_query_result",
             file_path=str(csv_file),
@@ -661,6 +709,8 @@ class TestExecuteDaxHistoryLogging:
         data = json.loads(result)
         assert "historyEntryId" in data
         assert "savedTo" in data
+        page = await call(mcp_with_tools, "read_query_result", file_path=data["savedTo"], limit=2)
+        assert json.loads(page)["rows"] == [{"x": "0"}, {"x": "1"}]
 
 
 # ---------------------------------------------------------------------------
