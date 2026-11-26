@@ -90,7 +90,6 @@ The agent explores the schema, writes the DAX, handles the file, and delivers th
 | `logout` | Clear the cached token (forces re-authentication) |
 | `list_apps` | List all Power BI apps you have access to — **start here**; returns `id` and `workspaceId` for each app |
 | `list_datasets` | List datasets accessible through an app (use `id` from `list_apps`); workspace is resolved automatically |
-| `get_dataset_info` | Metadata and last 5 refresh history entries for a dataset |
 | `list_tables` | All visible tables in a dataset |
 | `list_measures` | Measures with name, table, description, and format string |
 | `list_columns` | Columns with data type and key flag |
@@ -111,7 +110,7 @@ The agent explores the schema, writes the DAX, handles the file, and delivers th
 
 ### Step 1 — Create an Azure AD app registration
 
-OAuth 2.0 requires a **client ID** to identify which application is acting on your behalf. The registration is free, requires no client secret, and does not need Power BI admin consent for the two read-only scopes used here.
+OAuth 2.0 requires a **client ID** to identify which application is acting on your behalf. The registration is free and uses delegated read permissions. Your tenant’s consent policy determines whether an administrator must approve them.
 
 1. Go to [portal.azure.com](https://portal.azure.com) → **Azure Active Directory** → **App registrations** → **New registration**.
 2. Name it (e.g. `PowerBI MCP`). For account types choose **Accounts in this organizational directory only** (single-tenant). Click **Register**.
@@ -262,7 +261,7 @@ Once connected, ask your LLM to follow this sequence naturally:
                          ← page through large results without filling context
 ```
 
-> **Note:** Always use `list_apps` as the starting point. In app-managed organisations (like most enterprise Power BI setups), dataset access is granted through Power BI apps — `list_datasets` uses the app's reports endpoint to discover accessible datasets, which works correctly regardless of direct workspace membership.
+> **Note:** Always use `list_apps` as the starting point. In app-managed organisations (like most enterprise Power BI setups), dataset access is granted through Power BI apps — `list_datasets` uses report metadata to find datasets in the app's workspace, which works correctly regardless of direct workspace membership.
 
 ### DAX query examples
 
@@ -324,7 +323,7 @@ Returns `rows`, `totalRows`, `offset`, `limit`, and `hasMore`. Increment `offset
 |---|---|---|
 | `query_summary` | `str` (optional) | Short description of what the user asked for — logged to the local query history for auditability and cross-session reuse. |
 | `result_name` | `str` (optional) | Short label used in the CSV filename — e.g. `"gmv by market 2024"` → `dax_result_gmv_by_market_2024_20260305_143022.csv`. Max 40 characters. |
-| `max_rows` | `int` (optional) | Hard cap applied via `TOPN` at the Power BI engine level. Useful for quick sampling without rewriting the DAX. |
+| `max_rows` | `int` (optional) | Maximum rows returned or saved. Simple EVALUATE queries also use TOPN inside Power BI. |
 
 **Output directory** defaults to `~/powerbi_output`. Override with `POWERBI_OUTPUT_DIR` in your MCP client's `env` block. CSV files and the query history log are not automatically cleaned up — manage the directory manually or add a retention policy.
 
@@ -342,11 +341,14 @@ Returns `rows`, `totalRows`, `offset`, `limit`, and `hasMore`. Increment `offset
 
 ## Security
 
+CSV exports preserve the text returned by Power BI. When importing untrusted results into a spreadsheet, import text columns as text to prevent formula evaluation.
+
 - Tokens are persisted using OS-native secure storage via [`msal-extensions`](https://github.com/AzureAD/microsoft-authentication-extensions-for-python):
-  - **macOS** — Keychain
-  - **Windows** — DPAPI-encrypted file
-  - **Linux** — LibSecret (gnome-keyring / KWallet); falls back to an encrypted file if unavailable
-- The cache file is written to `~/.powerbi_mcp_token_cache.bin` and is covered by `.gitignore`.
+  - **macOS** uses Keychain.
+  - **Windows** uses a DPAPI-encrypted file.
+  - **Linux** uses LibSecret (gnome-keyring / KWallet).
+- When the OS secure store is unavailable, sign-in lasts only for the current server process. Use the `authenticate` tool to sign in on headless systems.
+- `~/.powerbi_mcp_token_cache.bin` holds encrypted tokens on Windows and signals cache updates on macOS and Linux. Older versions could write plaintext tokens to this path when secure storage failed. If you used that fallback, remove the legacy file and sign in again.
 - The server never logs access tokens.
 - All data access is gated by the user's own Power BI permissions (delegated OAuth 2.0 — no service principal, no client secret).
 

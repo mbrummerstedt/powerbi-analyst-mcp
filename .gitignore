@@ -30,3 +30,6 @@ bundle/manifest.json
 
 # Built bundles contain baked-in secrets — never commit
 dist/
+
+# Local query results and history
+powerbi_output/

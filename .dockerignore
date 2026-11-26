@@ -1,0 +1,8 @@
+*
+!LICENSE
+!README.md
+!requirements.txt
+!pyproject.toml
+!powerbi_mcp/
+powerbi_mcp/*
+!powerbi_mcp/*.py

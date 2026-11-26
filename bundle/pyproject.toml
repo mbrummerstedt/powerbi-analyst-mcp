@@ -1,10 +1,11 @@
 [project]
 name = "powerbi-analyst-mcp"
-version = "0.5.2"
+version = "0.5.3"
 description = "Read-only MCP server for Power BI semantic models — query workspaces, datasets, and execute DAX via any MCP client"
 requires-python = ">=3.10"
 dependencies = [
-    "mcp[cli]>=1.0.0",
+    "portalocker>=3.2,<4",
+    "mcp>=1.30.0,<2",
     "msal>=1.28.0",
     "msal-extensions>=1.2.0",
     "httpx>=0.27.0",

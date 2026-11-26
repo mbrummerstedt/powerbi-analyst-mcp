@@ -35,14 +35,13 @@ mcp = FastMCP(
         Typical workflow:
         1. Call `authenticate` if this is the first run or the token has expired.
         2. Call `list_apps` to find installed apps and get their workspaceId.
-        3. Call `list_datasets` with the workspaceId from the app response.
+        3. Call `list_datasets` with the app id from the app response.
         4. Call `list_tables`, `list_measures`, or `list_columns` to explore
            the data model structure.
         5. Call `execute_dax` to retrieve data using a DAX query.
 
         All dataset operations require BOTH a workspace_id AND a dataset_id.
-        The workspace_id must come from `list_apps` (the workspaceId field) —
-        never from workspace enumeration. Permissions are granted through apps.
+        The workspace_id comes from the workspaceId field returned by `list_datasets`. Permissions are granted through apps.
         """
     ),
 )

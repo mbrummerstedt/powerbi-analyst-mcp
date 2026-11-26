@@ -1,11 +1,11 @@
 """
 Integration tests against the live Power BI REST API.
 
-These tests are SKIPPED automatically when no cached token exists.
+These tests require explicit opt-in and a cached token.
 To run them:
 
   1. python server.py --login
-  2. pytest tests/integration/ -v
+  2. POWERBI_LIVE_TESTS=1 pytest tests/integration/ -v
 
 Tests make structural assertions only (valid JSON shape, presence of required
 fields) — no hardcoded workspace or dataset IDs are required.
@@ -13,6 +13,7 @@ fields) — no hardcoded workspace or dataset IDs are required.
 
 from __future__ import annotations
 
+import os
 import uuid
 
 import pytest
@@ -22,8 +23,8 @@ from powerbi_mcp.client import PowerBIClient
 from powerbi_mcp.config import Settings
 
 pytestmark = pytest.mark.skipif(
-    not TOKEN_CACHE_PATH.exists(),
-    reason="No cached token — run 'python server.py --login' first",
+    os.environ.get("POWERBI_LIVE_TESTS") != "1" or not TOKEN_CACHE_PATH.exists(),
+    reason="Live tests require POWERBI_LIVE_TESTS=1 and a cached token",
 )
 
 
@@ -31,7 +32,7 @@ pytestmark = pytest.mark.skipif(
 def live_client() -> PowerBIClient:
     """Authenticated client using the real cached token."""
     settings = Settings()
-    auth = PowerBIAuth(settings.client_id)
+    auth = PowerBIAuth(settings.client_id, settings.tenant_id)
     token = auth.get_token_silent()
     if token is None:
         pytest.skip("Token cache exists but no valid token — re-run login")

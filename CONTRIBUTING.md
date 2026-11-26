@@ -78,7 +78,7 @@ pytest tests/ -v
 **Integration tests** (requires a cached login token — run `python server.py --login` first):
 
 ```bash
-pytest tests/integration/ -v
+POWERBI_LIVE_TESTS=1 pytest tests/integration/ -v
 ```
 
 The integration tests call the real Power BI REST API and skip automatically if no token is cached.
@@ -103,7 +103,7 @@ powerbi_mcp/app.py
 - **No service principal.** Authentication uses the device code flow (delegated OAuth 2.0), so data access is always scoped to the signed-in user's own Power BI permissions.
 - **OS-native token storage.** `msal-extensions` persists the token cache using the platform's secure store (Keychain / DPAPI / LibSecret) rather than a plain file.
 - **Pydantic throughout.** Settings are validated at startup; all API responses are parsed into typed Pydantic models before being handled by tools.
-- **Read-only by design.** The two OAuth scopes (`Dataset.Read.All`, `Workspace.Read.All`) and the tool set only allow reads.
+- **Read-only by design.** The delegated read scopes (`App.Read.All`, `Report.Read.All`, `Dataset.Read.All`, `Workspace.Read.All`) and the tool set only allow reads.
 - **Context-window-safe results.** `execute_dax` returns small results inline and automatically writes larger results to a named CSV, keeping the agent context lean regardless of query size.
 
 ## Adding a new tool

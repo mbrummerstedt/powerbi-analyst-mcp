@@ -9,17 +9,20 @@ browser step:
 
   - macOS   → Keychain
   - Windows → DPAPI-encrypted file
-  - Linux   → LibSecret (gnome-keyring / KWallet); falls back to an
-               encrypted file if LibSecret is unavailable.
+  - Linux   → LibSecret (gnome-keyring / KWallet)
+
+If secure storage is unavailable, tokens last only for the server process.
 """
 
 from __future__ import annotations
 
+import logging
+from functools import cached_property
 from pathlib import Path
 
 import msal
 from msal_extensions import (
-    FilePersistence,
+    CrossPlatLock,
     PersistedTokenCache,
     build_encrypted_persistence,
 )
@@ -39,59 +42,53 @@ SCOPES = [
 ]
 
 TOKEN_CACHE_PATH = Path.home() / ".powerbi_mcp_token_cache.bin"
-
-
-def _build_cache(path: Path) -> PersistedTokenCache:
-    """
-    Build a platform-appropriate encrypted token cache.
-
-    Falls back to a plain FilePersistence if the OS secure store is
-    unavailable (e.g. a headless Linux server without gnome-keyring).
-    """
-    try:
-        persistence = build_encrypted_persistence(str(path))
-    except Exception:
-        persistence = FilePersistence(str(path))
-    return PersistedTokenCache(persistence)
+logger = logging.getLogger(__name__)
 
 
 class PowerBIAuth:
     """Handles OAuth token acquisition and caching for Power BI API access."""
 
     def __init__(self, client_id: str, tenant_id: str = "organizations"):
-        self.client_id = client_id
-        self.tenant_id = tenant_id
-        self.cache = _build_cache(TOKEN_CACHE_PATH)
+        self._client_id = client_id
+        self._authority = f"{AUTHORITY_BASE}/{tenant_id}"
+        try:
+            self._persistence = build_encrypted_persistence(str(TOKEN_CACHE_PATH))
+        except (ImportError, OSError, RuntimeError, ValueError):
+            logger.warning("OS secure storage is unavailable. Power BI sign-in lasts for this session only.")
+            self._persistence = None
 
-        self.app = msal.PublicClientApplication(
-            client_id,
-            authority=f"{AUTHORITY_BASE}/{tenant_id}",
+        if self._persistence is None:
+            self.cache = msal.SerializableTokenCache()
+        else:
+            self._cache_lock = self._persistence.get_location() + ".lockfile"
+            self.cache = PersistedTokenCache(self._persistence, lock_location=self._cache_lock)
+
+    @cached_property
+    def app(self) -> msal.PublicClientApplication:
+        # MSAL contacts Entra ID during construction. Logout works offline.
+        return msal.PublicClientApplication(
+            self._client_id,
+            authority=self._authority,
             token_cache=self.cache,
+            timeout=15,
         )
+
+    @property
+    def can_persist_tokens(self) -> bool:
+        return self._persistence is not None
 
     def get_token_silent(self) -> str | None:
         """
         Return a valid access token from the secure cache.
 
-        Returns None if no account is cached (login required).
-        Raises RuntimeError if a token exists but cannot be refreshed
-        (e.g. network unavailable, token revoked).
+        Returns None when sign-in is required.
         """
         accounts = self.app.get_accounts()
         if not accounts:
             return None
 
         result = self.app.acquire_token_silent(SCOPES, account=accounts[0])
-        if result and "access_token" in result:
-            return result["access_token"]
-
-        if result and "error" in result:
-            raise RuntimeError(
-                f"Token refresh failed ({result['error']}): "
-                f"{result.get('error_description', 'unknown error')}"
-            )
-
-        return None
+        return result.get("access_token") if result else None
 
     def initiate_device_flow(self) -> dict:
         """
@@ -105,10 +102,12 @@ class PowerBIAuth:
         flow = self.app.initiate_device_flow(scopes=SCOPES)
         if "user_code" not in flow:
             raise RuntimeError(
-                f"Failed to initiate device flow: {flow.get('error_description', flow)}"
+                f"Failed to initiate device flow: {flow.get('error', 'unknown error')}"
             )
-        self._pending_flow = flow
         return flow
+
+    def poll_device_flow(self, flow: dict) -> dict:
+        return self.app.acquire_token_by_device_flow(flow, exit_condition=lambda _: True)
 
     def complete_device_flow(self, flow: dict) -> str:
         """
@@ -118,17 +117,14 @@ class PowerBIAuth:
         result = self.app.acquire_token_by_device_flow(flow)
         if "access_token" not in result:
             raise RuntimeError(
-                f"Authentication failed: {result.get('error_description', result)}"
+                f"Authentication failed: {result.get('error', 'unknown error')}"
             )
         return result["access_token"]
 
     def clear_cache(self) -> None:
         """Remove cached tokens (forces re-authentication on next call)."""
-        if TOKEN_CACHE_PATH.exists():
-            TOKEN_CACHE_PATH.unlink()
-        self.cache = _build_cache(TOKEN_CACHE_PATH)
-        self.app = msal.PublicClientApplication(
-            self.client_id,
-            authority=f"{AUTHORITY_BASE}/{self.tenant_id}",
-            token_cache=self.cache,
-        )
+        if self._persistence is not None:
+            # Keychain and LibSecret use the file only to signal cache updates.
+            with CrossPlatLock(self._cache_lock):
+                self._persistence.save("{}")
+        self.cache.deserialize(None)

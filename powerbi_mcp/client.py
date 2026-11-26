@@ -8,8 +8,9 @@ membership requirement of the direct groups/datasets endpoint:
     → all user-visible reports with populated datasetId + datasetWorkspaceId
     → filter by datasetWorkspaceId == workspace_id to scope to the right app workspace
 
-  GET /v1.0/myorg/datasets/{dataset_id}
-    → dataset metadata (org-level; requires only Build permission)
+  GET /v1.0/myorg/groups/{workspace_id}/datasets/{dataset_id}
+    → dataset metadata when the caller has workspace access
+    → otherwise infer the dataset name from its reports
 
 This avoids the 2-hop path (app reports → workspace reports) that fails with
 401 for App (Build) users who have no direct workspace membership.
@@ -23,8 +24,9 @@ Reference: https://learn.microsoft.com/en-us/rest/api/power-bi/
 
 from __future__ import annotations
 
-import json
+from itertools import chain
 from typing import Any
+from uuid import UUID
 
 import httpx
 
@@ -52,6 +54,20 @@ class PowerBIError(Exception):
         super().__init__(f"Power BI API error {status_code}: {message}")
 
 
+def _guid(value: str, parameter: str) -> str:
+    try:
+        return str(UUID(value))
+    except ValueError as error:
+        raise PowerBIError(400, f"{parameter} must be a GUID.") from error
+
+
+def _dax_table_filter(table_name: str | None) -> str:
+    if not table_name:
+        return ""
+    quoted_name = table_name.replace('"', '""')
+    return f'\n    && [Table] = "{quoted_name}"'
+
+
 def _dataset_name_from_reports(report_names: list[str]) -> str:
     """Infer a dataset name from the report names that reference it.
 
@@ -68,13 +84,21 @@ def _dataset_name_from_reports(report_names: list[str]) -> str:
     return min(report_names, key=len)
 
 
+def _error_message(error: object, default: str) -> str:
+    if isinstance(error, dict):
+        return str(error.get("message") or error.get("code") or default)
+    return default
+
+
 def _raise_for_status(response: httpx.Response) -> None:
-    if response.is_error:
-        try:
-            detail = response.json().get("error", {}).get("message", response.text)
-        except Exception:
-            detail = response.text
-        raise PowerBIError(response.status_code, detail)
+    if response.is_success:
+        return
+    try:
+        payload = response.json()
+    except ValueError:
+        payload = None
+    error = payload.get("error") if isinstance(payload, dict) else None
+    raise PowerBIError(response.status_code, _error_message(error, response.reason_phrase))
 
 
 class PowerBIClient:
@@ -113,12 +137,10 @@ class PowerBIClient:
         """
         Return all reports in a Power BI app.
 
-        Note: ``datasetId`` in the returned reports is deliberately empty —
-        the app endpoint detaches reports from datasets.  Use
-        ``list_datasets`` which resolves the real datasetId via
-        ``originalReportObjectId``.
+        The app endpoint may omit the dataset ID. Use ``list_datasets``
+        to discover datasets via the organization-level reports endpoint.
         """
-        url = f"{BASE_URL}/apps/{app_id}/reports"
+        url = f"{BASE_URL}/apps/{_guid(app_id, 'app_id')}/reports"
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.get(url, headers=self._headers)
             _raise_for_status(resp)
@@ -151,16 +173,17 @@ class PowerBIClient:
         1. ``GET /myorg/reports``
            → all user-visible reports with populated ``datasetId`` and
            ``datasetWorkspaceId``.  Filter to those whose
-           ``datasetWorkspaceId`` matches the app's ``workspace_id``.
+           ``datasetWorkspaceId`` matches the app's ``workspace_id``. Exclude
+           reports that explicitly identify a different app.
         2. Deduplicate by ``datasetId``.
-        3. ``GET /datasets/{datasetId}`` (org-level, Build permission only)
-           → dataset metadata, resolved in parallel.
+        3. ``GET /groups/{workspace_id}/datasets/{datasetId}``
+           → dataset metadata or a name inferred from report names when
+           metadata is inaccessible.
 
         Parameters
         ----------
         app_id:
-            The ``id`` field from ``list_apps``.  Not used directly in the
-            new discovery path but kept for API symmetry and future use.
+            The ``id`` field from ``list_apps``.
         workspace_id:
             The ``workspaceId`` field from the same app in ``list_apps``.
             Used to filter org-level reports to only those belonging to this
@@ -180,6 +203,8 @@ class PowerBIClient:
                 continue
             if report.dataset_workspace_id != workspace_id:
                 continue
+            if report.app_id and report.app_id.lower() != app_id.lower():
+                continue
             if report.dataset_id not in seen:
                 seen[report.dataset_id] = (report.dataset_workspace_id, [])
             seen[report.dataset_id][1].append(report.name)
@@ -193,9 +218,10 @@ class PowerBIClient:
             try:
                 ds = await self.get_dataset(ds_ws_id, ds_id)
                 return ds, ds_ws_id
-            except PowerBIError:
-                # App-Build-only users get 401/404 from the in-group endpoint.
-                # Synthesise a minimal Dataset from the report names we have.
+            except PowerBIError as error:
+                if error.status_code not in (401, 403, 404):
+                    raise
+                # App-only users may have Build permission without workspace membership.
                 ds = Dataset(id=ds_id, name=_dataset_name_from_reports(report_names))
                 return ds, ds_ws_id
 
@@ -212,7 +238,7 @@ class PowerBIClient:
         Does not require direct workspace membership — works with Build
         permission granted via a Power BI app.
         """
-        url = f"{BASE_URL}/datasets/{dataset_id}"
+        url = f"{BASE_URL}/datasets/{_guid(dataset_id, 'dataset_id')}"
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.get(url, headers=self._headers)
             _raise_for_status(resp)
@@ -220,6 +246,8 @@ class PowerBIClient:
 
     async def get_dataset(self, workspace_id: str, dataset_id: str) -> Dataset:
         """Return metadata for a single dataset."""
+        workspace_id = _guid(workspace_id, "workspace_id")
+        dataset_id = _guid(dataset_id, "dataset_id")
         url = f"{BASE_URL}/groups/{workspace_id}/datasets/{dataset_id}"
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
             resp = await client.get(url, headers=self._headers)
@@ -230,14 +258,13 @@ class PowerBIClient:
         self, workspace_id: str, dataset_id: str, top: int = 10
     ) -> list[RefreshEntry]:
         """Return recent refresh history for a dataset."""
-        url = (
-            f"{BASE_URL}/groups/{workspace_id}/datasets/{dataset_id}"
-            f"/refreshes?$top={top}"
-        )
+        workspace_id = _guid(workspace_id, "workspace_id")
+        dataset_id = _guid(dataset_id, "dataset_id")
+        url = f"{BASE_URL}/groups/{workspace_id}/datasets/{dataset_id}/refreshes"
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-            resp = await client.get(url, headers=self._headers)
-            _raise_for_status(resp)
-            data = resp.json().get("value", [])
+            response = await client.get(url, headers=self._headers, params={"$top": top})
+            _raise_for_status(response)
+            data = response.json().get("value", [])
             return [RefreshEntry.model_validate(entry) for entry in data]
 
     async def execute_dax(
@@ -250,9 +277,8 @@ class PowerBIClient:
         """
         Execute a DAX query against a dataset and return the raw API response.
 
-        Uses the in-group executeQueries endpoint. The workspace_id must come
-        from list_apps (the app's workspaceId field), not from list_workspaces —
-        this ensures the correct app-granted permission context is used.
+        Uses the org-level executeQueries endpoint, which supports app-granted
+        dataset access.
 
         The response shape is:
         {
@@ -270,8 +296,8 @@ class PowerBIClient:
         Parameters
         ----------
         workspace_id:
-            GUID of the workspace (group) that owns the dataset. Must be
-            obtained from list_apps workspaceId, not list_workspaces.
+            GUID of the workspace that owns the dataset. Retained for client
+            compatibility.
         dataset_id:
             GUID of the dataset to query.
         dax_query:
@@ -279,21 +305,29 @@ class PowerBIClient:
         include_nulls:
             Whether to include null values in the result rows.
         """
-        # Use org-level endpoint (not in-group) so app-granted access works.
-        # In-group executeQueries requires workspace membership; org-level only
-        # requires Build permission on the dataset, which is what Power BI Apps
-        # grant. workspace_id is kept in the signature for API symmetry and
-        # future use but is not part of the URL.
-        del workspace_id  # intentionally unused — see comment above
-        url = f"{BASE_URL}/datasets/{dataset_id}/executeQueries"
+        url = f"{BASE_URL}/datasets/{_guid(dataset_id, 'dataset_id')}/executeQueries"
         payload = {
             "queries": [{"query": dax_query}],
             "serializerSettings": {"includeNulls": include_nulls},
         }
         async with httpx.AsyncClient(timeout=DEFAULT_TIMEOUT) as client:
-            resp = await client.post(url, headers=self._headers, json=payload)
-            _raise_for_status(resp)
-            return resp.json()
+            response = await client.post(url, headers=self._headers, json=payload)
+            _raise_for_status(response)
+            result = response.json()
+
+        # Power BI can report truncation via an error in an HTTP 200 response.
+        query_results = result.get("results", [])
+        tables = (
+            table
+            for query_result in query_results
+            for table in query_result.get("tables", [])
+        )
+        for envelope in chain((result,), query_results, tables):
+            if error := envelope.get("error"):
+                raise PowerBIError(
+                    response.status_code, _error_message(error, "Incomplete DAX result")
+                )
+        return result
 
     async def list_tables(self, workspace_id: str, dataset_id: str) -> list[Table]:
         """
@@ -333,11 +367,7 @@ ORDER BY [Name]
         table_name:
             If provided, only return measures from that table.
         """
-        table_filter = (
-            f'\n    && [Table] = "{table_name}"'
-            if table_name
-            else ""
-        )
+        table_filter = _dax_table_filter(table_name)
         dax = f"""
 EVALUATE
 SELECTCOLUMNS(
@@ -372,11 +402,7 @@ ORDER BY [TableName], [Name]
         table_name:
             If provided, only return columns from that table.
         """
-        table_filter = (
-            f'\n    && [Table] = "{table_name}"'
-            if table_name
-            else ""
-        )
+        table_filter = _dax_table_filter(table_name)
         dax = f"""
 EVALUATE
 SELECTCOLUMNS(

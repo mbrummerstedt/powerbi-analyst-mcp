@@ -18,15 +18,33 @@ scanning the JSONL file.
 from __future__ import annotations
 
 import json
+import sys
+import tempfile
 import uuid
+from collections import deque
+from contextlib import contextmanager
 from datetime import datetime, timedelta
 from pathlib import Path
+
+from portalocker import Lock
+from portalocker.exceptions import LockException
+
+from .output import open_regular_fd
 
 LOG_FILENAME = "powerbi_query_log.jsonl"
 
 
 def _log_path(output_dir: str) -> Path:
     return Path(output_dir) / LOG_FILENAME
+
+
+@contextmanager
+def _log_lock(path: Path):
+    try:
+        with Lock(path.with_suffix(".lock"), mode="ab", timeout=5, opener=open_regular_fd):
+            yield
+    except LockException as exc:
+        raise OSError("Could not lock query history.") from exc
 
 
 def make_log_entry(
@@ -62,8 +80,8 @@ def append_query_log(output_dir: str, entry: dict) -> None:
     Creates the output directory and log file if they do not exist.
     """
     path = _log_path(output_dir)
-    path.parent.mkdir(parents=True, exist_ok=True)
-    with path.open("a", encoding="utf-8") as fh:
+    path.parent.mkdir(mode=0o700, parents=True, exist_ok=True)
+    with _log_lock(path), open(path, "a", encoding="utf-8", opener=open_regular_fd) as fh:
         fh.write(json.dumps(entry, ensure_ascii=False, default=str) + "\n")
 
 
@@ -98,59 +116,56 @@ def search_query_log(
         Matching entries, newest first. Empty list if the log file does not
         exist or no entries match.
     """
-    path = _log_path(output_dir)
-    if not path.exists():
+    if since_days < 0 or limit < 0:
+        raise ValueError("Since days and limit must be non-negative.")
+    if limit == 0:
         return []
 
+    path = _log_path(output_dir)
     cutoff = None
     if since_days > 0:
-        cutoff = datetime.now() - timedelta(days=since_days)
+        now = datetime.now()
+        cutoff = now - timedelta(days=min(since_days, (now - datetime.min).days))
 
     keyword_lower = keyword.lower() if keyword else None
 
-    # Read all lines, reverse for newest-first, filter, collect up to limit.
-    with path.open(encoding="utf-8") as fh:
-        lines = fh.readlines()
-
-    results: list[dict] = []
-    for line in reversed(lines):
-        line = line.strip()
-        if not line:
-            continue
-        try:
-            entry = json.loads(line)
-        except json.JSONDecodeError:
-            continue
-
-        # Time filter
-        if cutoff is not None:
+    try:
+        path.lstat()
+    except FileNotFoundError:
+        return []
+    results: deque[dict] = deque(maxlen=min(limit, sys.maxsize))
+    with _log_lock(path), open(path, encoding="utf-8", opener=open_regular_fd) as fh:
+        for line in fh:
             try:
-                ts = datetime.fromisoformat(entry["timestamp"])
-                if ts < cutoff:
-                    # Since we're reading newest-first and entries are appended
-                    # chronologically, once we hit an entry older than the
-                    # cutoff we can stop entirely.
-                    break
-            except (KeyError, ValueError):
+                entry = json.loads(line)
+            except json.JSONDecodeError:
+                continue
+            if not isinstance(entry, dict):
                 continue
 
-        # Dataset filter
-        if dataset_id and entry.get("dataset_id") != dataset_id:
-            continue
+            if cutoff is not None:
+                try:
+                    ts = datetime.fromisoformat(entry["timestamp"])
+                    if ts.tzinfo is not None:
+                        ts = ts.astimezone().replace(tzinfo=None)
+                    if ts < cutoff:
+                        continue
+                except (KeyError, TypeError, ValueError):
+                    continue
 
-        # Keyword filter (matches query_summary, dax_query, result_name)
-        if keyword_lower:
-            searchable = " ".join(
-                str(entry.get(f) or "") for f in ("query_summary", "dax_query", "result_name")
-            ).lower()
-            if keyword_lower not in searchable:
+            if dataset_id and entry.get("dataset_id") != dataset_id:
                 continue
 
-        results.append(entry)
-        if len(results) >= limit:
-            break
+            if keyword_lower:
+                searchable = " ".join(
+                    str(entry.get(f) or "") for f in ("query_summary", "dax_query", "result_name")
+                ).lower()
+                if keyword_lower not in searchable:
+                    continue
 
-    return results
+            results.append(entry)
+
+    return list(reversed(results))
 
 
 def delete_query_log_entry(output_dir: str, entry_id: str) -> bool:
@@ -162,30 +177,34 @@ def delete_query_log_entry(output_dir: str, entry_id: str) -> bool:
     Returns True if the entry was found and removed, False otherwise.
     """
     path = _log_path(output_dir)
-    if not path.exists():
+    if not path.parent.is_dir():
         return False
 
-    with path.open(encoding="utf-8") as fh:
-        lines = fh.readlines()
-
-    found = False
-    kept: list[str] = []
-    for line in lines:
-        stripped = line.strip()
-        if not stripped:
-            continue
+    with _log_lock(path):
+        replacement = None
         try:
-            entry = json.loads(stripped)
-        except json.JSONDecodeError:
-            kept.append(line)
-            continue
-        if entry.get("id") == entry_id:
-            found = True
-        else:
-            kept.append(line)
+            found = False
+            with open(path, encoding="utf-8", opener=open_regular_fd) as source:
+                with tempfile.NamedTemporaryFile(
+                    mode="w", encoding="utf-8", prefix=".powerbi_query_log-",
+                    dir=path.parent, delete=False,
+                ) as target:
+                    replacement = Path(target.name)
+                    for line in source:
+                        try:
+                            entry = json.loads(line)
+                        except json.JSONDecodeError:
+                            entry = None
+                        if isinstance(entry, dict) and entry.get("id") == entry_id:
+                            found = True
+                        else:
+                            target.write(line)
+            if found:
+                replacement.replace(path)
+        except FileNotFoundError:
+            return False
+        finally:
+            if replacement is not None:
+                replacement.unlink(missing_ok=True)
 
-    if found:
-        with path.open("w", encoding="utf-8") as fh:
-            fh.writelines(kept)
-
-    return found
+        return found

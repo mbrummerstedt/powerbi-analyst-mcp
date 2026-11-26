@@ -52,6 +52,7 @@ class UserReport(BaseModel):
 
     id: str
     name: str
+    app_id: Optional[str] = Field(None, alias="appId")
     dataset_id: Optional[str] = Field(None, alias="datasetId")
     dataset_workspace_id: Optional[str] = Field(None, alias="datasetWorkspaceId")
     web_url: Optional[str] = Field(None, alias="webUrl")

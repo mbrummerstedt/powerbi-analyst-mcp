@@ -4,7 +4,7 @@ Tests for Pydantic model validation in powerbi_mcp/models.py.
 
 from __future__ import annotations
 
-from datetime import datetime, timezone
+from datetime import datetime
 
 import pytest
 from pydantic import ValidationError

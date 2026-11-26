@@ -20,7 +20,6 @@ from powerbi_mcp.client import (
 from powerbi_mcp.models import App, Column, Dataset, Measure, RefreshEntry, Table, Workspace
 from tests.conftest import (
     APP_ID,
-    APP_REPORT_ID,
     DATASET_ID,
     FAKE_TOKEN,
     WORKSPACE_ID,
@@ -232,6 +231,19 @@ class TestListDatasets:
         assert ws_id == WORKSPACE_ID
 
     @respx.mock
+    async def test_skips_reports_linked_to_another_app_in_the_same_workspace(
+        self, client: PowerBIClient
+    ):
+        report = {
+            **make_user_report_payload(),
+            "appId": "ffffffff-0000-0000-0000-000000000099",
+        }
+        respx.get(f"{BASE}/reports").mock(
+            return_value=Response(200, json={"value": [report]})
+        )
+        assert await client.list_datasets(APP_ID, WORKSPACE_ID) == []
+
+    @respx.mock
     async def test_skips_reports_with_missing_dataset_fields(self, client: PowerBIClient):
         """Reports with empty datasetId or missing datasetWorkspaceId are skipped."""
         valid = make_user_report_payload()
@@ -263,6 +275,18 @@ class TestListDatasets:
         assert ds.id == DATASET_ID
         assert ds.name == "Sales"
         assert ws_id == WORKSPACE_ID
+
+    @respx.mock
+    async def test_surfaces_metadata_rate_limit(self, client: PowerBIClient):
+        respx.get(f"{BASE}/reports").mock(
+            return_value=Response(200, json={"value": [make_user_report_payload()]})
+        )
+        respx.get(f"{BASE}/groups/{WORKSPACE_ID}/datasets/{DATASET_ID}").mock(
+            return_value=Response(429, json={"error": {"message": "Rate limited"}})
+        )
+        with pytest.raises(PowerBIError, match="Rate limited") as error:
+            await client.list_datasets(APP_ID, WORKSPACE_ID)
+        assert error.value.status_code == 429
 
 
 class TestDatasetNameFromReports:
@@ -330,6 +354,14 @@ class TestGetDatasetRefreshHistory:
 
 class TestExecuteDax:
     @respx.mock
+    async def test_rejects_invalid_dataset_id_before_making_a_request(
+        self, client: PowerBIClient
+    ):
+        with pytest.raises(PowerBIError, match="dataset_id must be a GUID"):
+            await client.execute_dax(WORKSPACE_ID, "invalid", 'EVALUATE ROW("x", 1)')
+        assert not respx.calls
+
+    @respx.mock
     async def test_posts_to_org_level_url(self, client: PowerBIClient):
         """execute_dax uses the org-level endpoint so app-granted access works
         (in-group requires workspace membership, which app users don't have)."""
@@ -360,6 +392,21 @@ class TestExecuteDax:
         with pytest.raises(PowerBIError) as exc_info:
             await client.execute_dax(WORKSPACE_ID, DATASET_ID, "INVALID")
         assert exc_info.value.status_code == 400
+
+    @pytest.mark.parametrize("level", ["response", "result", "table"])
+    @respx.mock
+    async def test_partial_dax_results_report_api_error(
+        self, client: PowerBIClient, level: str
+    ):
+        payload = make_dax_response([{"[x]": 1}])
+        result = payload["results"][0]
+        envelopes = {"response": payload, "result": result, "table": result["tables"][0]}
+        envelopes[level]["error"] = {"code": "DAXQueryError", "message": "Too many rows"}
+        respx.post(f"{BASE}/datasets/{DATASET_ID}/executeQueries").mock(
+            return_value=Response(200, json=payload)
+        )
+        with pytest.raises(PowerBIError, match="Too many rows"):
+            await client.execute_dax(WORKSPACE_ID, DATASET_ID, 'EVALUATE ROW("x", 1)')
 
 
 class TestListTables:
@@ -423,6 +470,20 @@ class TestListMeasures:
         await client.list_measures(WORKSPACE_ID, DATASET_ID, table_name="Sales")
         body = json.loads(route.calls.last.request.content)
         assert '"Sales"' in body["queries"][0]["query"]
+
+    @pytest.mark.parametrize("method_name", ["list_measures", "list_columns"])
+    @respx.mock
+    async def test_doubles_quotes_in_table_name(self, client: PowerBIClient, method_name: str):
+        import json
+
+        route = respx.post(f"{BASE}/datasets/{DATASET_ID}/executeQueries").mock(
+            return_value=Response(200, json=make_dax_response([]))
+        )
+        await getattr(client, method_name)(
+            WORKSPACE_ID, DATASET_ID, table_name='Sales "Domestic"'
+        )
+        query = json.loads(route.calls.last.request.content)["queries"][0]["query"]
+        assert '[Table] = "Sales ""Domestic"""' in query
 
 
 class TestListColumns:

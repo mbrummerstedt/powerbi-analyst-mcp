@@ -13,13 +13,15 @@ from __future__ import annotations
 
 import sys
 
-from powerbi_mcp.app import main, mcp, settings
+from powerbi_mcp.app import main, mcp as mcp, settings
 from powerbi_mcp.auth import PowerBIAuth
 
 if __name__ == "__main__":
     if "--login" in sys.argv:
         print("Starting Power BI login (device code flow)…")
         auth = PowerBIAuth(settings.client_id, settings.tenant_id)
+        if not auth.can_persist_tokens:
+            sys.exit("OS secure storage is unavailable. Use the authenticate tool inside your MCP session.")
         existing = auth.get_token_silent()
         if existing:
             print("Already authenticated. Token is valid.")
